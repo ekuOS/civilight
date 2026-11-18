@@ -88,8 +88,8 @@ sudo dd if=out/civilight.raw of=/dev/sdX bs=16M status=progress conv=fsync
 
 Boot the device in x86-64 UEFI mode with Secure Boot disabled. The firmware
 can use the standard EFI fallback path without a preconfigured boot entry.
-The root filesystem keeps the size assigned during the build. Ethernet DHCP
-is enabled. Include any hardware-specific firmware packages in
+The root filesystem grows to fill its partition at boot. Ethernet DHCP is
+enabled. Include any hardware-specific firmware packages in
 `packages.conf` before building for that hardware.
 
 After signing in, check the running kernel, filesystem, and installed

@@ -117,24 +117,33 @@ class Gentoo {
     String passwordHash,
     File initrd,
   ) async {
-    final mounted = <String>[];
-    try {
-      for (final name in ['/dev', '/sys', '/proc']) {
-        final target = at(name);
-        await run('mount', [
-          name == '/proc' ? '--bind' : '--rbind',
-          name,
-          target,
-        ]);
-        mounted.add(target);
-      }
+    await withMounts(() async {
       await File('/etc/resolv.conf').copy(at('/etc/resolv.conf'));
       await write('/etc/portage/package.use/civilight', '''
 sys-apps/systemd boot kernel-install apparmor
 sys-kernel/dracut systemd
 ''');
+      // linux-info.eclass must check the target configuration during emerge,
+      // including when AppArmor is installed from a binary package.
+      const kernelConfig = '/usr/src/linux';
+      final numbers = kernel.release.split('-').first.split('.');
+      final extra = RegExp(r'-rc[0-9]+').firstMatch(kernel.release)?[0] ?? '';
+      await write('$kernelConfig/Makefile', '''
+VERSION = ${numbers[0]}
+PATCHLEVEL = ${numbers[1]}
+SUBLEVEL = ${numbers.length == 3 ? numbers[2] : '0'}
+EXTRAVERSION = $extra
+''');
+      await write(
+        '$kernelConfig/include/config/kernel.release',
+        '${kernel.release}\n',
+      );
+      await File('${kernel.artifacts.path}/.config')
+          .copy(at('$kernelConfig/.config'));
+      const targetKernel = 'KERNEL_DIR=$kernelConfig';
       await inside(['emerge-webrsync']);
       await inside([
+        targetKernel,
         'emerge',
         '--color=n',
         '--getbinpkg',
@@ -147,8 +156,15 @@ sys-kernel/dracut systemd
         'sys-fs/btrfs-progs',
       ]);
       if (packages.isNotEmpty) {
-        await inside(['emerge', '--color=n', '--getbinpkg', ...packages]);
+        await inside([
+          targetKernel,
+          'emerge',
+          '--color=n',
+          '--getbinpkg',
+          ...packages,
+        ]);
       }
+      await Directory(at(kernelConfig)).delete(recursive: true);
 
       await write('/var/db/repos/civilight/profiles/repo_name', 'civilight\n');
       await write('/var/db/repos/civilight/metadata/layout.conf', '''
@@ -169,6 +185,20 @@ priority = 100
         license: 'GPL-2',
         description: 'ekuOS AppArmor kernel',
       );
+      for (final path in [
+        '/etc/env.d/00glibc',
+        '/etc/gai.conf',
+        '/etc/host.conf',
+        '/etc/nsswitch.conf',
+        '/etc/rpc',
+      ]) {
+        final existing = File(at(path));
+        final destination = File('${glibcPayload.path}$path');
+        if (await existing.exists() && !await destination.exists()) {
+          await destination.parent.create(recursive: true);
+          await existing.copy(destination.path);
+        }
+      }
       await mergePayload(
         glibcName,
         glibcVersion,
@@ -196,6 +226,8 @@ priority = 100
         '/var/tmp/civilight.initrd',
       ]);
       await File(at('/var/tmp/civilight.initrd')).rename(initrd.path);
+      final buildState = Directory(at('/var/tmp/portage'));
+      if (await buildState.exists()) await buildState.delete(recursive: true);
       if (!await File(at('/usr/lib/systemd/boot/efi/systemd-bootx64.efi'))
               .exists() ||
           !await File(at('/usr/lib/systemd/systemd')).exists()) {
@@ -203,11 +235,7 @@ priority = 100
           'Gentoo systemd or its x86-64 EFI boot manager is missing.',
         );
       }
-    } finally {
-      for (final mount in mounted.reversed) {
-        await run('umount', ['--lazy', mount]);
-      }
-    }
+    });
 
     await File(at('/etc/resolv.conf')).delete();
     await Link(at('/etc/resolv.conf'))
@@ -229,6 +257,69 @@ PARTLABEL=civilight-esp /efi vfat umask=0077,nofail,x-systemd.automount 0 2
 ''');
     await Directory(at('/efi')).create();
     await write('/etc/machine-id', '');
+  }
+
+  Future<void> withMounts(Future<void> Function() action) async {
+    final mounted = <String>[];
+    try {
+      await run('mount', [
+        '-t',
+        'tmpfs',
+        '-o',
+        'mode=0755',
+        'tmpfs',
+        at('/dev'),
+      ]);
+      mounted.add(at('/dev'));
+      for (final device in [
+        'null',
+        'zero',
+        'full',
+        'random',
+        'urandom',
+        'tty',
+      ]) {
+        final target = at('/dev/$device');
+        await File(target).create();
+        await run('mount', ['--bind', '/dev/$device', target]);
+      }
+      await Directory(at('/dev/pts')).create();
+      await run('mount', [
+        '-t',
+        'devpts',
+        '-o',
+        'newinstance,ptmxmode=0666,mode=0620,gid=5',
+        'devpts',
+        at('/dev/pts'),
+      ]);
+      for (final (name, target) in [
+        ('ptmx', 'pts/ptmx'),
+        ('fd', '/proc/self/fd'),
+        ('stdin', 'fd/0'),
+        ('stdout', 'fd/1'),
+        ('stderr', 'fd/2'),
+      ]) {
+        await Link(at('/dev/$name')).create(target);
+      }
+      await Directory(at('/dev/shm')).create();
+      await run('mount', [
+        '-t',
+        'tmpfs',
+        '-o',
+        'mode=1777',
+        'tmpfs',
+        at('/dev/shm'),
+      ]);
+      for (final (name, mode) in [('/sys', '--rbind'), ('/proc', '--bind')]) {
+        await run('mount', [mode, name, at(name)]);
+        mounted.add(at(name));
+      }
+      await action();
+    } finally {
+      for (final mount in mounted.reversed) {
+        await run('umount', ['--lazy', mount]);
+      }
+    }
   }
 
   Future<void> mergePayload(
@@ -271,6 +362,7 @@ S="\${WORKDIR}"
         'civilight') {
       throw BuildFailure('Portage did not record $name from civilight.');
     }
+    await inside(['ebuild', '--skip-manifest', ebuild, 'clean']);
     await File(at(ebuild)).delete();
   }
 }

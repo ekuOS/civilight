@@ -16,6 +16,10 @@ ${await File('${checkout.path}/eku.conf').readAsString()}
 CONFIG_BTRFS_FS=y
 CONFIG_BTRFS_FS_POSIX_ACL=y
 CONFIG_BLK_DEV_NVME=y
+CONFIG_CGROUP_BPF=y
+CONFIG_FANOTIFY=y
+CONFIG_IKCONFIG=y
+CONFIG_IKCONFIG_PROC=y
 ''');
   await run(Platform.resolvedExecutable, [
     'run',
@@ -98,7 +102,13 @@ class Kernel {
     }
     await File('${modules.path}/modules.order')
         .writeAsString('${order.join('\n')}\n');
-    await run('depmod', ['--basedir', payload.path, release]);
+    await run('depmod', [
+      '--basedir',
+      payload.path,
+      '--moduledir',
+      '/usr/lib/modules',
+      release,
+    ]);
   }
 }
 
@@ -107,9 +117,12 @@ Future<String> stageGlibc(
   Directory payload,
   int jobs,
 ) async {
+  final build = '${payload.parent.path}/glibc-build';
   await run(Platform.resolvedExecutable, [
     'run',
     'build.dart',
+    '--output',
+    build,
     '--jobs',
     '$jobs',
   ], cwd: checkout.path);
@@ -124,10 +137,18 @@ Future<String> stageGlibc(
   }
   await run('make', [
     '-j$jobs',
+    'LD=ld.lld',
+    'AR=llvm-ar',
+    'NM=llvm-nm',
+    'OBJCOPY=llvm-objcopy',
+    'OBJDUMP=llvm-objdump',
+    'RANLIB=llvm-ranlib',
+    'READELF=llvm-readelf',
+    'STRIP=llvm-strip',
     'ekuos-mimalloc-object=${checkout.path}/mimmaloc/build/mimalloc.o',
     'DESTDIR=${payload.path}',
     'install',
-  ], cwd: '${checkout.path}/glibc/build');
+  ], cwd: build);
 
   // The x86-64 glibc build uses /lib64 and /sbin. Gentoo's usr-merged
   // stage3 implements those paths as symlinks.
@@ -151,6 +172,10 @@ Future<String> stageGlibc(
     if (!await File('${payload.path}/usr/lib64/$name').exists()) {
       throw BuildFailure('ekuOS glibc installation lacks /usr/lib64/$name.');
     }
+  }
+  final loader = Link('${payload.path}/usr/bin/ld.so');
+  if (!await loader.exists() && !await File(loader.path).exists()) {
+    await loader.create('../lib64/ld-linux-x86-64.so.2');
   }
   final info = await Directory('${payload.path}/usr/share/doc/glibc-$version')
       .create(recursive: true);

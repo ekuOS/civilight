@@ -22,7 +22,7 @@ Build a Gentoo AMD64 UEFI disk image with mkosi.
   --glibc DIR              ekuOS glibc checkout (default: ../glibc)
   --output FILE            New raw image (default: out/civilight.raw)
   --root-size-gib N        Minimum Btrfs root partition size (default: 8)
-  --jobs N                 Parallel compiler jobs (default: host CPU count)
+  --jobs N                 Parallel compiler jobs (default: 2)
   --help                   Show this help
 
 Run as an ordinary user with subordinate UID/GID mappings, or as root.
@@ -77,12 +77,7 @@ class Options {
   }
 }
 
-Future<void> makeDisk(
-  Directory work,
-  Directory root,
-  int rootSize,
-  File output,
-) async {
+Future<void> makeDisk(Directory work, int rootSize, File output) async {
   final repart = await Directory('${work.path}/mkosi.repart').create();
   await File('${repart.path}/00-esp.conf').writeAsString('''
 [Partition]
@@ -119,14 +114,18 @@ BaseTrees=root
 Bootable=yes
 Bootloader=systemd-boot
 UnifiedKernelImages=yes
-SecureBoot=no
 Initrds=initrd
 KernelCommandLine=root=PARTUUID rootfstype=btrfs rw console=tty0 console=ttyS0,115200n8
 CleanPackageMetadata=no
 Hostname=civilight
 Locale=C.UTF-8
 
+[Validation]
+SecureBoot=no
+
 [Build]
+BuildSources=
+PackageCacheDirectory=pkgcache
 WorkspaceDirectory=workspace
 ''');
   await Directory('${work.path}/workspace').create();
@@ -143,7 +142,7 @@ WorkspaceDirectory=workspace
 
 Future<void> build(Options options) async {
   final script = Platform.script;
-  final jobs = options.number('--jobs', Platform.numberOfProcessors);
+  final jobs = options.number('--jobs', 2);
   final rootSize = options.number('--root-size-gib', 8, minimum: 4);
   final keyring = options.path('--gentoo-keyring');
   if (!await File(keyring).exists())
@@ -218,7 +217,7 @@ Future<void> build(Options options) async {
       initrd,
     );
     await requireSpace(work.path, 2 * gib);
-    await makeDisk(work, gentoo.root, rootSize, output);
+    await makeDisk(work, rootSize, output);
   } finally {
     await work.delete(recursive: true);
   }

@@ -60,8 +60,9 @@ category/package atom on each line. Blank lines and comments beginning with
 The build always installs systemd with its EFI boot manager, Dracut, kmod,
 Btrfs tools, and AppArmor userspace and profiles.
 
-The kernel builder uses the AppArmor flavor with Btrfs and common boot
-requirements enabled. Use `--kernel-artifacts DIR` to reuse a compatible
+The kernel builder uses the AppArmor flavor and its default `eku.conf`.
+Use a kernel checkout whose default profile enables Btrfs and NVMe.
+Use `--kernel-artifacts DIR` to reuse a compatible
 `linux-eku-aa` artifact bundle. The image registers it with Portage as
 `sys-kernel/linux-eku`. The patched 64-bit ekuOS glibc replaces the Gentoo
 package in its existing slot as `sys-libs/glibc`. Both local binary packages

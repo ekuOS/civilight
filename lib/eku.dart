@@ -10,24 +10,11 @@ Future<Directory> buildKernel(
   Directory work,
   int jobs,
 ) async {
-  final config = File('${work.path}/linux-eku.conf');
-  await config.writeAsString('''
-${await File('${checkout.path}/eku.conf').readAsString()}
-CONFIG_BTRFS_FS=y
-CONFIG_BTRFS_FS_POSIX_ACL=y
-CONFIG_BLK_DEV_NVME=y
-CONFIG_CGROUP_BPF=y
-CONFIG_FANOTIFY=y
-CONFIG_IKCONFIG=y
-CONFIG_IKCONFIG_PROC=y
-''');
   await run(Platform.resolvedExecutable, [
     'run',
     'build.dart',
     '--flavor',
     'aa',
-    '--config',
-    config.path,
     '--output',
     '${work.path}/kernel-build',
     '--artifacts',

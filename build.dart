@@ -154,7 +154,7 @@ WorkspaceDirectory=workspace
   await run('chmod', ['0600', image.path]);
   // Both paths are on the output filesystem. A hard link publishes the
   // completed image atomically and fails if another build already won.
-  await run('ln', ['--', image.path, output.path]);
+  await run('ln', ['--no-target-directory', '--', image.path, output.path]);
   stdout.writeln('Image written to ${output.path}');
 }
 

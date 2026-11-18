@@ -1,0 +1,2 @@
+sys-apps/systemd boot kernel-install apparmor
+sys-kernel/dracut systemd

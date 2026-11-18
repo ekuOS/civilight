@@ -60,6 +60,14 @@ category/package atom on each line. Blank lines and comments beginning with
 The build always installs systemd with its EFI boot manager, Dracut, kmod,
 Btrfs tools, and AppArmor userspace and profiles.
 
+Edit [config/portage](config/portage) to change the image's Portage settings.
+The builder installs Clang, LLD, and LLVM from Gentoo's signed binary
+repository, then copies `make.conf` and the package and repository settings
+into the image. Portage builds the image's additional packages and their
+missing dependencies from source with the configured Clang/LLVM toolchain.
+The signed stage3 supplies the initial system and C library until Civilight
+installs the ekuOS glibc package.
+
 The kernel builder uses the AppArmor flavor and its default `eku.conf`.
 Use a kernel checkout whose default profile enables Btrfs and NVMe.
 Use `--kernel-artifacts DIR` to reuse a compatible

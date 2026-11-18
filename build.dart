@@ -212,7 +212,11 @@ Future<void> build(Options options) async {
         ? options.path('--stage3')
         : null;
     final archive = await stageArchive(work, keyring, local);
-    final gentoo = Gentoo(Directory('${work.path}/root'), jobs);
+    final gentoo = Gentoo(
+      Directory('${work.path}/root'),
+      jobs,
+      Directory.fromUri(script.resolve('config/portage/')),
+    );
     await gentoo.unpack(archive);
 
     final artifacts = reuseKernel

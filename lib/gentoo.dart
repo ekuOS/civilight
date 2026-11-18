@@ -58,9 +58,10 @@ Future<List<String>> readPackages(File file) async {
 }
 
 class Gentoo {
-  Gentoo(this.root, this.jobs);
+  Gentoo(this.root, this.jobs, this.portageConfig);
   final Directory root;
   final int jobs;
+  final Directory portageConfig;
   String at(String path) => '${root.path}$path';
 
   Future<void> write(String path, String contents) async {
@@ -69,17 +70,49 @@ class Gentoo {
     await file.writeAsString(contents);
   }
 
-  Future<void> inside(List<String> args, {String? input}) => run('chroot', [
-    root.path,
-    '/usr/bin/env',
-    '-i',
-    'PATH=/usr/bin:/usr/sbin:/bin:/sbin',
-    'HOME=/root',
-    'TERM=dumb',
-    'LC_ALL=C.UTF-8',
-    'MAKEOPTS=-j$jobs',
-    ...args,
-  ], input: input);
+  Future<void> copyPortageConfig(String path) async {
+    final target = File(at('/etc/portage/$path'));
+    await target.parent.create(recursive: true);
+    await File('${portageConfig.path}/$path').copy(target.path);
+  }
+
+  Future<void> inside(List<String> args, {String? input}) async {
+    // Gentoo's env-update adds the active LLVM slot to ROOTPATH.
+    final profile = File(at('/etc/profile.env'));
+    final env = await profile.exists() ? await profile.readAsString() : '';
+    final path = RegExp(
+      r"^export ROOTPATH='([^']+)'$",
+      multiLine: true,
+    ).firstMatch(env)?[1];
+    await run('chroot', [
+      root.path,
+      '/usr/bin/env',
+      '-i',
+      'PATH=${path ?? '/usr/bin:/usr/sbin:/bin:/sbin'}',
+      'HOME=/root',
+      'TERM=dumb',
+      'LC_ALL=C.UTF-8',
+      'MAKEOPTS=-j$jobs',
+      ...args,
+    ], input: input);
+  }
+
+  Future<void> installToolchain() async {
+    await inside([
+      'emerge',
+      '--color=n',
+      '--getbinpkg',
+      '--usepkgonly',
+      '--noreplace',
+      'llvm-core/clang',
+      'llvm-core/lld',
+      'llvm-core/llvm',
+    ]);
+    await inside(['env-update']);
+    await inside(['clang', '--version']);
+    await inside(['ld.lld', '--version']);
+    await copyPortageConfig('make.conf');
+  }
 
   Future<void> unpack(File archive) async {
     await root.create();
@@ -119,10 +152,7 @@ class Gentoo {
   ) async {
     await withMounts(() async {
       await File('/etc/resolv.conf').copy(at('/etc/resolv.conf'));
-      await write('/etc/portage/package.use/civilight', '''
-sys-apps/systemd boot kernel-install apparmor
-sys-kernel/dracut systemd
-''');
+      await copyPortageConfig('package.use/civilight');
       // linux-info.eclass must check the target configuration during emerge,
       // including when AppArmor is installed from a binary package.
       const kernelConfig = '/usr/src/linux';
@@ -142,11 +172,13 @@ EXTRAVERSION = $extra
           .copy(at('$kernelConfig/.config'));
       const targetKernel = 'KERNEL_DIR=$kernelConfig';
       await inside(['emerge-webrsync', '--quiet']);
+      await installToolchain();
       await inside([
         targetKernel,
         'emerge',
         '--color=n',
-        '--getbinpkg',
+        '--getbinpkg=n',
+        '--usepkg=n',
         '--update',
         '--newuse',
         '--oneshot',
@@ -163,7 +195,8 @@ EXTRAVERSION = $extra
           targetKernel,
           'emerge',
           '--color=n',
-          '--getbinpkg',
+          '--getbinpkg=n',
+          '--usepkg=n',
           ...packages,
         ]);
       }
@@ -186,12 +219,7 @@ EXTRAVERSION = $extra
 masters = gentoo
 thin-manifests = true
 ''');
-      await write('/etc/portage/repos.conf/civilight.conf', '''
-[civilight]
-location = /var/db/repos/civilight
-auto-sync = no
-priority = 100
-''');
+      await copyPortageConfig('repos.conf/civilight.conf');
       await mergePayload(
         kernelName,
         kernel.version,
@@ -228,10 +256,7 @@ priority = 100
         description: 'ekuOS GNU C Library with mimalloc',
         use: '+cet +multiarch +ssp +static-libs',
       );
-      await write(
-        '/etc/portage/package.mask/civilight',
-        'sys-libs/glibc::gentoo\n',
-      );
+      await copyPortageConfig('package.mask/civilight');
       await inside(['ldconfig']);
       await inside(['/usr/lib64/libc.so.6']);
       await inside(['chpasswd', '--encrypted'], input: 'root:$passwordHash\n');

@@ -1,8 +1,8 @@
 # Civilight
 
-Civilight builds a raw, bootable Gentoo disk image for x86-64 UEFI systems. The
-GPT image contains a FAT EFI System Partition with systemd-boot and a unified
-kernel image, plus a writable Btrfs root filesystem. After writing the image to
+Civilight builds a raw, bootable ekuOS-civilight image for x86-64 UEFI systems
+from Gentoo. The GPT image contains a FAT EFI System Partition with systemd-boot,
+a unified kernel image, and a writable Btrfs root filesystem. After writing the image to
 a whole drive, boot it and sign in as `root` with the password selected during
 the build.
 
@@ -16,8 +16,9 @@ the build.
 - Network access for Gentoo and the development sources. An unprivileged build
   requires subordinate UID and GID allocations and working `newuidmap` and
   `newgidmap` helpers. The script also accepts execution as root.
-- At least 12 GiB free on the output filesystem, with more space for large
-  package selections. Temporary files are created next to the raw image.
+- At least 12 GiB free in the build workspace, with more space for large
+  package selections. The output filesystem needs room for the raw image
+  when it is on a separate volume.
   External checkouts also need room for their source trees. The script
   reports insufficient space and out-of-space tool failures on stderr.
 
@@ -78,11 +79,37 @@ are retained in the image's Portage package cache. Gentoo's stock glibc is
 masked after the replacement. Rebuild the image with updated ekuOS checkouts
 to refresh the kernel, its unified kernel image, and glibc.
 
-The default output is `out/civilight.raw`. Use `--output /path/to/civilight.raw`
-to place both the temporary workspace and image on a different filesystem.
+The default output is `out/civilight.raw`. Temporary workspaces are created in
+the output directory by default. Use `--temp-dir DIR` to put workspaces on a
+separate filesystem and `--output FILE.raw` to choose the image destination.
 The root partition starts at 8 GiB. Use `--root-size-gib N` to change its
 minimum size. The build uses two parallel jobs by default. Use `--jobs N`
 to change the job count. Run `dart run build.dart --help` for all options.
+
+## Clean temporary files
+
+Successful or failed builds normally remove their own workspaces. Use
+`clean` to remove inactive Civilight workspaces left by interrupted builds.
+Use `--temp-dir` to select the build workspace parent and `--output` to scan
+the output directory for temporary image copies. The default is `out/`.
+Use the same account that ran the build. Published raw images are kept.
+
+```sh
+dart run build.dart clean --temp-dir /path/to/work --dry-run
+dart run build.dart clean --temp-dir /path/to/work
+```
+
+## Run in QEMU
+
+Install QEMU with KVM, GTK, and OVMF. Fedora provides the GTK backend in
+`qemu-ui-gtk`. The launcher opens a window with the guest's serial login.
+It uses temporary disk changes by default. Add `--persist` to write back to
+the raw image and `--firmware FILE` to select a different OVMF firmware file.
+
+```sh
+dart run run.dart
+dart run run.dart /path/to/civilight.raw
+```
 
 ## Write and boot
 

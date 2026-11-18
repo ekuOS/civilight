@@ -118,14 +118,15 @@ Future<String> stageGlibc(
   int jobs,
 ) async {
   final build = '${payload.parent.path}/glibc-build';
-  await run(Platform.resolvedExecutable, [
-    'run',
-    'build.dart',
-    '--output',
-    build,
-    '--jobs',
-    '$jobs',
-  ], cwd: checkout.path);
+  await run(
+    Platform.resolvedExecutable,
+    ['run', 'build.dart', '--output', build, '--jobs', '$jobs'],
+    cwd: checkout.path,
+    environment: {
+      // Keep the AppArmor image independent of host SELinux libraries.
+      'ac_cv_lib_selinux_is_selinux_enabled': 'no',
+    },
+  );
   final source = '${checkout.path}/glibc/src';
   final versionHeader = await File('$source/version.h').readAsString();
   final version = RegExp(

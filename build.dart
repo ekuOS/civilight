@@ -78,6 +78,21 @@ class Options {
 }
 
 Future<void> makeDisk(Directory work, int rootSize, File output) async {
+  // A Gentoo package can install a named pipe. mkosi 26 copies directory
+  // trees with cp --copy-contents, which would wait on the pipe.
+  await run('tar', [
+    '--create',
+    '--sparse',
+    '--numeric-owner',
+    '--acls',
+    '--xattrs',
+    '--xattrs-include=*',
+    '--file',
+    '${work.path}/root.tar',
+    '--directory',
+    '${work.path}/root',
+    '.',
+  ]);
   final repart = await Directory('${work.path}/mkosi.repart').create();
   await File('${repart.path}/00-esp.conf').writeAsString('''
 [Partition]
@@ -95,6 +110,7 @@ Type=root
 Label=civilight-root
 Format=btrfs
 CopyFiles=/
+Minimize=guess
 SizeMinBytes=${rootSize}G
 ''');
   await File('${work.path}/mkosi.conf').writeAsString('''
@@ -110,10 +126,11 @@ CompressOutput=no
 SectorSize=512
 
 [Content]
-BaseTrees=root
+BaseTrees=root.tar
 Bootable=yes
 Bootloader=systemd-boot
-UnifiedKernelImages=yes
+UnifiedKernelImages=unsigned
+UnifiedKernelImageFormat=civilight-&k
 Initrds=initrd
 KernelCommandLine=root=PARTUUID rootfstype=btrfs rw console=tty0 console=ttyS0,115200n8
 CleanPackageMetadata=no
@@ -236,9 +253,9 @@ Future<void> main(List<String> args) async {
     final inside = args.first == '--inside-build-namespace';
     final options = Options.parse(inside ? args.sublist(1) : args);
     if (inside) {
-      if (await capture('id', ['-u']) != '0') {
+      if (pid != 1 || await capture('id', ['-u']) != '0') {
         throw const BuildFailure(
-          'The build requires UID 0 in its private namespace.',
+          'The build requires UID 0 and PID 1 in its private namespaces.',
         );
       }
       await build(options);

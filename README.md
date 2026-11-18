@@ -58,7 +58,7 @@ Edit [packages.conf](packages.conf) or supply `--packages FILE`. Put one
 category/package atom on each line. Blank lines and comments beginning with
 `#` are ignored. Portage installs the listed packages and their dependencies.
 The build always installs systemd with its EFI boot manager, Dracut, kmod,
-Btrfs tools, and AppArmor userspace.
+Btrfs tools, and AppArmor userspace and profiles.
 
 The kernel builder uses the AppArmor flavor with Btrfs and common boot
 requirements enabled. Use `--kernel-artifacts DIR` to reuse a compatible

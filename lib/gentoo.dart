@@ -141,18 +141,21 @@ EXTRAVERSION = $extra
       await File('${kernel.artifacts.path}/.config')
           .copy(at('$kernelConfig/.config'));
       const targetKernel = 'KERNEL_DIR=$kernelConfig';
-      await inside(['emerge-webrsync']);
+      await inside(['emerge-webrsync', '--quiet']);
       await inside([
         targetKernel,
         'emerge',
         '--color=n',
         '--getbinpkg',
+        '--update',
+        '--newuse',
         '--oneshot',
         'sys-apps/systemd',
         'sys-kernel/dracut',
         'sys-apps/kmod',
         'sys-apps/apparmor',
         'sys-apps/apparmor-utils',
+        'sec-policy/apparmor-profiles',
         'sys-fs/btrfs-progs',
       ]);
       if (packages.isNotEmpty) {
@@ -165,6 +168,18 @@ EXTRAVERSION = $extra
         ]);
       }
       await Directory(at(kernelConfig)).delete(recursive: true);
+      final newerGlibc = await capture('chroot', [
+        root.path,
+        '/usr/bin/portageq',
+        'best_version',
+        '/',
+        '>$glibcName-$glibcVersion-r999999',
+      ]);
+      if (newerGlibc.isNotEmpty) {
+        throw BuildFailure(
+          'The Gentoo image needs $newerGlibc but ekuOS glibc is $glibcVersion.',
+        );
+      }
 
       await write('/var/db/repos/civilight/profiles/repo_name', 'civilight\n');
       await write('/var/db/repos/civilight/metadata/layout.conf', '''
@@ -185,6 +200,11 @@ priority = 100
         license: 'GPL-2',
         description: 'ekuOS AppArmor kernel',
       );
+      // Gentoo installs the time zone utilities through sys-libs/timezone-data.
+      for (final name in ['tzselect', 'zdump', 'zic']) {
+        final file = File('${glibcPayload.path}/usr/bin/$name');
+        if (await file.exists()) await file.delete();
+      }
       for (final path in [
         '/etc/env.d/00glibc',
         '/etc/gai.conf',
@@ -256,6 +276,11 @@ enable systemd-resolved.service
 PARTLABEL=civilight-esp /efi vfat umask=0077,nofail,x-systemd.automount 0 2
 ''');
     await Directory(at('/efi')).create();
+    await run('chmod', ['0700', at('/efi')]);
+    await write(
+      '/efi/loader/loader.conf',
+      'default civilight-${kernel.release}.efi\n',
+    );
     await write('/etc/machine-id', '');
   }
 
@@ -333,8 +358,8 @@ PARTLABEL=civilight-esp /efi vfat umask=0077,nofail,x-systemd.automount 0 2
   }) async {
     final pf = '${name.split('/').last}-$version';
     final ebuild = '/var/db/repos/civilight/$name/$pf.ebuild';
-    // Portage runs the standard phases. Dart supplies the prepared image
-    // between install and qmerge so no custom ebuild phase scripts are needed.
+    // Dart supplies the prepared image after the empty install phase.
+    // Portage then packages it and merges it through its binary package path.
     await write(ebuild, '''
 EAPI=8
 DESCRIPTION="$description"
@@ -346,16 +371,25 @@ IUSE="$use"
 RESTRICT="strip"
 S="\${WORKDIR}"
 ''');
-    await inside(['ebuild', '--skip-manifest', ebuild, 'install']);
-    final packageRoot = '/var/tmp/portage/${name.split('/').first}/$pf/image';
+    await inside(['ebuild', '--skip-manifest', ebuild, 'clean', 'install']);
+    final buildDir = '/var/tmp/portage/${name.split('/').first}/$pf';
+    final packageRoot = '$buildDir/image';
     await run('cp', ['-a', '${payload.path}/.', at(packageRoot)]);
+    if (name == glibcName) await recordGlibcLinkage(buildDir);
     await inside([
       'FEATURES=noauto -binpkg-signing',
       'ebuild',
       '--skip-manifest',
       ebuild,
       'package',
-      'qmerge',
+    ]);
+    await inside([
+      'emerge',
+      '--color=n',
+      '--usepkgonly',
+      '--oneshot',
+      '--nodeps',
+      '=$name-$version::civilight',
     ]);
     final installed = '/var/db/pkg/${name.split('/').first}/$pf';
     if ((await File(at('$installed/repository')).readAsString()).trim() !=
@@ -364,5 +398,54 @@ S="\${WORKDIR}"
     }
     await inside(['ebuild', '--skip-manifest', ebuild, 'clean']);
     await File(at(ebuild)).delete();
+  }
+
+  Future<void> recordGlibcLinkage(String buildDir) async {
+    // Portage's install-time ELF scan ran before Dart supplied the payload.
+    // Preserve its normal ABI index for dependency resolution and upgrades.
+    final scan = await capture('chroot', [
+      root.path,
+      '/usr/bin/scanelf',
+      '-yRBF',
+      '%a;%p;%S;%r;%n',
+      '$buildDir/image/',
+    ]);
+    final provides = <String>{};
+    final requires = <String>{};
+    final linkage = <String>[];
+    for (final line in scan.split('\n')) {
+      final fields = line.split(';');
+      if (fields.length != 5 || fields[0] != 'EM_X86_64') {
+        throw BuildFailure('Unexpected ELF metadata in ekuOS glibc: $line');
+      }
+      final path = '/${fields[1]}';
+      final soname = fields[2].isEmpty && path.endsWith('.so')
+          ? path.split('/').last
+          : fields[2];
+      final rpath = fields[3].trim() == '-' ? '' : fields[3];
+      final needed = fields[4];
+      if (soname.isNotEmpty) {
+        provides.add(soname);
+      }
+      requires.addAll(needed.split(',').where((library) => library.isNotEmpty));
+      linkage.add('X86_64;$path;$soname;$rpath;$needed;x86_64');
+    }
+    if (!provides.containsAll(['libc.so.6', 'ld-linux-x86-64.so.2'])) {
+      throw const BuildFailure(
+        'ekuOS glibc ELF metadata omits libc or its loader.',
+      );
+    }
+    await write('$buildDir/build-info/NEEDED.ELF.2', '${linkage.join('\n')}\n');
+    await write(
+      '$buildDir/build-info/PROVIDES',
+      'x86_64: ${(provides.toList()..sort()).join(' ')}',
+    );
+    requires.removeAll(provides);
+    if (requires.isNotEmpty) {
+      await write(
+        '$buildDir/build-info/REQUIRES',
+        'x86_64: ${(requires.toList()..sort()).join(' ')}',
+      );
+    }
   }
 }

@@ -134,6 +134,7 @@ WorkspaceDirectory=workspace
   if (!await image.exists() || await image.length() == 0) {
     throw const BuildFailure('mkosi did not produce the raw disk image.');
   }
+  await run('chmod', ['0600', image.path]);
   // Both paths are on the output filesystem. A hard link publishes the
   // completed image atomically and fails if another build already won.
   await run('ln', ['--', image.path, output.path]);

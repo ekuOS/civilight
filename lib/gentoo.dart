@@ -275,14 +275,13 @@ enable systemd-resolved.service
     await write('/etc/fstab', '''
 PARTLABEL=civilight-esp /efi vfat umask=0077,nofail,x-systemd.automount 0 2
 ''');
-    final growRoot = Link(
-      at(
-        '/etc/systemd/system/local-fs.target.wants/systemd-growfs-root.service',
-      ),
-    );
-    await growRoot.parent.create(recursive: true);
-    await growRoot.create(
-      '/usr/lib/systemd/system/systemd-growfs-root.service',
+    await write(
+      '/etc/systemd/system/local-fs.target.d/civilight-growfs.conf',
+      '''
+[Unit]
+Wants=systemd-growfs-root.service
+After=systemd-growfs-root.service
+''',
     );
     await Directory(at('/efi')).create();
     await run('chmod', ['0700', at('/efi')]);

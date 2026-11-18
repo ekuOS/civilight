@@ -1,2 +1,4 @@
 /out/
 .dart_tool/
+/gentoo-release.gpg
+/root-password.hash

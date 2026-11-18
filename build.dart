@@ -5,9 +5,11 @@ import 'dart:io';
 import 'lib/commands.dart';
 import 'lib/eku.dart';
 import 'lib/gentoo.dart';
+import 'lib/workspace.dart';
 
 const usage = '''
 Usage: dart run build.dart --gentoo-keyring FILE --root-password-file FILE [options]
+       dart run build.dart clean [--temp-dir DIR] [--output FILE] [--dry-run]
 
 Build a Gentoo AMD64 UEFI disk image with mkosi.
 
@@ -21,33 +23,39 @@ Build a Gentoo AMD64 UEFI disk image with mkosi.
   --kernel-artifacts DIR   Reuse a compatible linux-eku-aa artifact directory
   --glibc DIR              ekuOS glibc checkout (default: ../glibc)
   --output FILE            New raw image (default: out/civilight.raw)
+  --temp-dir DIR           Parent for build workspaces (default: output directory)
   --root-size-gib N        Minimum Btrfs root partition size (default: 8)
   --jobs N                 Parallel compiler jobs (default: 2)
   --help                   Show this help
 
 Run as an ordinary user with subordinate UID/GID mappings, or as root.
+The clean command removes inactive Civilight workspaces and keeps raw images.
 ''';
 
 class Options {
   Options(this.values);
   final Map<String, String> values;
 
-  static Options parse(List<String> args) {
+  static Options parse(List<String> args, {required bool clean}) {
     final values = <String, String>{};
+    final allowed = clean
+        ? const {'--temp-dir', '--output'}
+        : const {
+            '--gentoo-keyring',
+            '--root-password-file',
+            '--stage3',
+            '--packages',
+            '--kernel',
+            '--kernel-artifacts',
+            '--glibc',
+            '--output',
+            '--temp-dir',
+            '--root-size-gib',
+            '--jobs',
+          };
     for (var i = 0; i < args.length; i += 2) {
       final key = args[i];
-      if (!const {
-        '--gentoo-keyring',
-        '--root-password-file',
-        '--stage3',
-        '--packages',
-        '--kernel',
-        '--kernel-artifacts',
-        '--glibc',
-        '--output',
-        '--root-size-gib',
-        '--jobs',
-      }.contains(key)) {
+      if (!allowed.contains(key)) {
         throw BuildFailure('Unknown option: $key.');
       }
       if (i + 1 == args.length ||
@@ -75,9 +83,27 @@ class Options {
     }
     return value;
   }
+
+  File get output => File(
+    path('--output', Platform.script.resolve('out/civilight.raw').toFilePath()),
+  );
+
+  Directory get workParent => Directory(path('--temp-dir', output.parent.path));
 }
 
 Future<void> makeDisk(Directory work, int rootSize, File output) async {
+  final osRelease = File('${work.path}/root/usr/lib/os-release');
+  final release = (await osRelease.readAsLines()).where(
+    (line) => !line.startsWith('NAME=') && !line.startsWith('PRETTY_NAME='),
+  );
+  await osRelease.writeAsString(
+    [
+      'NAME="ekuOS-civilight"',
+      'PRETTY_NAME="ekuOS-civilight"',
+      ...release,
+      '',
+    ].join('\n'),
+  );
   // A Gentoo package can install a named pipe. mkosi 26 copies directory
   // trees with cp --copy-contents, which would wait on the pipe.
   await run('tar', [
@@ -146,15 +172,18 @@ PackageCacheDirectory=pkgcache
 WorkspaceDirectory=workspace
 ''');
   await Directory('${work.path}/workspace').create();
-  await run('mkosi', ['build'], cwd: work.path);
+  await run(
+    'mkosi',
+    ['build'],
+    cwd: work.path,
+    environment: {'TMPDIR': work.path},
+  );
   final image = File('${work.path}/image/civilight.raw');
   if (!await image.exists() || await image.length() == 0) {
     throw const BuildFailure('mkosi did not produce the raw disk image.');
   }
   await run('chmod', ['0600', image.path]);
-  // Both paths are on the output filesystem. A hard link publishes the
-  // completed image atomically and fails if another build already won.
-  await run('ln', ['--no-target-directory', '--', image.path, output.path]);
+  await publishImage(image, output);
   stdout.writeln('Image written to ${output.path}');
 }
 
@@ -191,9 +220,7 @@ Future<void> build(Options options) async {
       throw BuildFailure('Builder not found in ${checkout.path}.');
     }
   }
-  final output = File(
-    options.path('--output', script.resolve('out/civilight.raw').toFilePath()),
-  );
+  final output = options.output;
   if (!output.path.endsWith('.raw')) {
     throw const BuildFailure('--output must end with .raw.');
   }
@@ -202,12 +229,12 @@ Future<void> build(Options options) async {
     throw BuildFailure('Output already exists: ${output.path}.');
   }
   await output.parent.create(recursive: true);
-  final workParent = await output.parent.resolveSymbolicLinks();
-  await requireSpace(workParent, 12 * gib);
+  final workParent = await options.workParent.create(recursive: true);
+  final workPath = await workParent.resolveSymbolicLinks();
+  await requireSpace(workPath, 12 * gib);
   await requireSpace(glibcCheckout.path, 3 * gib);
   if (!reuseKernel) await requireSpace(kernelCheckout.path, 3 * gib);
-  final work = await Directory(workParent).createTemp('.civilight-');
-  try {
+  await withWorkspace(Directory(workPath), (work) async {
     final local = options.values.containsKey('--stage3')
         ? options.path('--stage3')
         : null;
@@ -240,9 +267,7 @@ Future<void> build(Options options) async {
     );
     await requireSpace(work.path, 2 * gib);
     await makeDisk(work, rootSize, output);
-  } finally {
-    await work.delete(recursive: true);
-  }
+  });
 }
 
 Future<void> main(List<String> args) async {
@@ -255,14 +280,28 @@ Future<void> main(List<String> args) async {
       throw const BuildFailure('An x86-64 Linux build host is required.');
     }
     final inside = args.first == '--inside-build-namespace';
-    final options = Options.parse(inside ? args.sublist(1) : args);
+    final arguments = args.sublist(inside ? 1 : 0);
+    final clean = arguments.isNotEmpty && arguments.first == 'clean';
+    if (clean) arguments.removeAt(0);
+    final dryRun = clean && arguments.remove('--dry-run');
+    final options = Options.parse(arguments, clean: clean);
     if (inside) {
       if (pid != 1 || await capture('id', ['-u']) != '0') {
         throw const BuildFailure(
           'The build requires UID 0 and PID 1 in its private namespaces.',
         );
       }
-      await build(options);
+      if (clean) {
+        for (final path in {
+          options.workParent.path,
+          if (options.values.containsKey('--output'))
+            options.output.parent.path,
+        }) {
+          await cleanWorkspaces(Directory(path), dryRun: dryRun);
+        }
+      } else {
+        await build(options);
+      }
       return;
     }
     final rootless = await capture('id', ['-u']) != '0';

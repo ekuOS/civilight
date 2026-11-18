@@ -10,18 +10,23 @@ Future<Directory> buildKernel(
   Directory work,
   int jobs,
 ) async {
-  await run(Platform.resolvedExecutable, [
-    'run',
-    'build.dart',
-    '--flavor',
-    'aa',
-    '--output',
-    '${work.path}/kernel-build',
-    '--artifacts',
-    '${work.path}/kernel-out',
-    '--jobs',
-    '$jobs',
-  ], cwd: checkout.path);
+  await run(
+    Platform.resolvedExecutable,
+    [
+      'run',
+      'build.dart',
+      '--flavor',
+      'aa',
+      '--output',
+      '${work.path}/kernel-build',
+      '--artifacts',
+      '${work.path}/kernel-out',
+      '--jobs',
+      '$jobs',
+    ],
+    cwd: checkout.path,
+    environment: {'TMPDIR': work.path},
+  );
   return Directory('${work.path}/kernel-out/linux-eku-aa');
 }
 
@@ -110,6 +115,7 @@ Future<String> stageGlibc(
     ['run', 'build.dart', '--output', build, '--jobs', '$jobs'],
     cwd: checkout.path,
     environment: {
+      'TMPDIR': payload.parent.path,
       // Keep the AppArmor image independent of host SELinux libraries.
       'ac_cv_lib_selinux_is_selinux_enabled': 'no',
     },
@@ -123,20 +129,25 @@ Future<String> stageGlibc(
   if (version == null || !await File('$source/malloc/eku-malloc.c').exists()) {
     throw const BuildFailure('Could not identify the ekuOS glibc build.');
   }
-  await run('make', [
-    '-j$jobs',
-    'LD=ld.lld',
-    'AR=llvm-ar',
-    'NM=llvm-nm',
-    'OBJCOPY=llvm-objcopy',
-    'OBJDUMP=llvm-objdump',
-    'RANLIB=llvm-ranlib',
-    'READELF=llvm-readelf',
-    'STRIP=llvm-strip',
-    'ekuos-mimalloc-object=${checkout.path}/mimmaloc/build/mimalloc.o',
-    'DESTDIR=${payload.path}',
-    'install',
-  ], cwd: build);
+  await run(
+    'make',
+    [
+      '-j$jobs',
+      'LD=ld.lld',
+      'AR=llvm-ar',
+      'NM=llvm-nm',
+      'OBJCOPY=llvm-objcopy',
+      'OBJDUMP=llvm-objdump',
+      'RANLIB=llvm-ranlib',
+      'READELF=llvm-readelf',
+      'STRIP=llvm-strip',
+      'ekuos-mimalloc-object=${checkout.path}/mimmaloc/build/mimalloc.o',
+      'DESTDIR=${payload.path}',
+      'install',
+    ],
+    cwd: build,
+    environment: {'TMPDIR': payload.parent.path},
+  );
 
   // The x86-64 glibc build uses /lib64 and /sbin. Gentoo's usr-merged
   // stage3 implements those paths as symlinks.

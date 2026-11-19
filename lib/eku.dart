@@ -3,7 +3,6 @@ import 'dart:io';
 import 'commands.dart';
 
 const kernelName = 'sys-kernel/linux-eku';
-const glibcName = 'sys-libs/glibc';
 
 Future<Directory> buildKernel(
   Directory checkout,
@@ -102,83 +101,4 @@ class Kernel {
       release,
     ]);
   }
-}
-
-Future<String> stageGlibc(
-  Directory checkout,
-  Directory payload,
-  int jobs,
-) async {
-  final build = '${payload.parent.path}/glibc-build';
-  await run(
-    Platform.resolvedExecutable,
-    ['run', 'build.dart', '--output', build, '--jobs', '$jobs'],
-    cwd: checkout.path,
-    environment: {
-      'TMPDIR': payload.parent.path,
-      // Keep the AppArmor image independent of host SELinux libraries.
-      'ac_cv_lib_selinux_is_selinux_enabled': 'no',
-    },
-  );
-  final source = '${checkout.path}/glibc/src';
-  final versionHeader = await File('$source/version.h').readAsString();
-  final version = RegExp(
-    r'^#define VERSION "(\d+\.\d+(?:\.\d+)?)"$',
-    multiLine: true,
-  ).firstMatch(versionHeader)?[1];
-  if (version == null || !await File('$source/malloc/eku-malloc.c').exists()) {
-    throw const BuildFailure('Could not identify the ekuOS glibc build.');
-  }
-  await run(
-    'make',
-    [
-      '-j$jobs',
-      'LD=ld.lld',
-      'AR=llvm-ar',
-      'NM=llvm-nm',
-      'OBJCOPY=llvm-objcopy',
-      'OBJDUMP=llvm-objdump',
-      'RANLIB=llvm-ranlib',
-      'READELF=llvm-readelf',
-      'STRIP=llvm-strip',
-      'ekuos-mimalloc-object=${checkout.path}/mimmaloc/build/mimalloc.o',
-      'DESTDIR=${payload.path}',
-      'install',
-    ],
-    cwd: build,
-    environment: {'TMPDIR': payload.parent.path},
-  );
-
-  // The x86-64 glibc build uses /lib64 and /sbin. Gentoo's usr-merged
-  // stage3 implements those paths as symlinks.
-  for (final (from, to) in [
-    ('lib64', 'usr/lib64'),
-    ('sbin', 'usr/bin'),
-    ('usr/sbin', 'usr/bin'),
-  ]) {
-    final old = Directory('${payload.path}/$from');
-    if (!await old.exists()) continue;
-    final target = await Directory('${payload.path}/$to')
-        .create(recursive: true);
-    for (final entry in await old.list(followLinks: false).toList()) {
-      await entry.rename(
-        '${target.path}/${entry.uri.pathSegments.where((s) => s.isNotEmpty).last}',
-      );
-    }
-    await old.delete();
-  }
-  for (final name in ['libc.so.6', 'ld-linux-x86-64.so.2', 'libc.a']) {
-    if (!await File('${payload.path}/usr/lib64/$name').exists()) {
-      throw BuildFailure('ekuOS glibc installation lacks /usr/lib64/$name.');
-    }
-  }
-  final loader = Link('${payload.path}/usr/bin/ld.so');
-  if (!await loader.exists() && !await File(loader.path).exists()) {
-    await loader.create('../lib64/ld-linux-x86-64.so.2');
-  }
-  final info = await Directory('${payload.path}/usr/share/doc/glibc-$version')
-      .create(recursive: true);
-  await File('${info.path}/ekuOS')
-      .writeAsString('https://github.com/ekuOS/glibc\n');
-  return version;
 }

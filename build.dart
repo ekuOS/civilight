@@ -21,7 +21,6 @@ Build a Gentoo AMD64 UEFI disk image with mkosi.
   --packages FILE          Package list (default: packages.conf beside build.dart)
   --kernel DIR             ekuOS kernel checkout (default: ../kernel)
   --kernel-artifacts DIR   Reuse a compatible linux-eku-aa artifact directory
-  --glibc DIR              ekuOS glibc checkout (default: ../glibc)
   --output FILE            New raw image (default: out/civilight.raw)
   --temp-dir DIR           Parent for build workspaces (default: output directory)
   --root-size-gib N        Minimum Btrfs root partition size (default: 8)
@@ -47,7 +46,6 @@ class Options {
             '--packages',
             '--kernel',
             '--kernel-artifacts',
-            '--glibc',
             '--output',
             '--temp-dir',
             '--root-size-gib',
@@ -211,14 +209,10 @@ Future<void> build(Options options) async {
   final kernelCheckout = Directory(
     options.path('--kernel', script.resolve('../kernel/').toFilePath()),
   );
-  final glibcCheckout = Directory(
-    options.path('--glibc', script.resolve('../glibc/').toFilePath()),
-  );
   final reuseKernel = options.values.containsKey('--kernel-artifacts');
-  for (final checkout in [if (!reuseKernel) kernelCheckout, glibcCheckout]) {
-    if (!await File('${checkout.path}/build.dart').exists()) {
-      throw BuildFailure('Builder not found in ${checkout.path}.');
-    }
+  if (!reuseKernel &&
+      !await File('${kernelCheckout.path}/build.dart').exists()) {
+    throw BuildFailure('Builder not found in ${kernelCheckout.path}.');
   }
   final output = options.output;
   if (!output.path.endsWith('.raw')) {
@@ -232,7 +226,6 @@ Future<void> build(Options options) async {
   final workParent = await options.workParent.create(recursive: true);
   final workPath = await workParent.resolveSymbolicLinks();
   await requireSpace(workPath, 12 * gib);
-  await requireSpace(glibcCheckout.path, 3 * gib);
   if (!reuseKernel) await requireSpace(kernelCheckout.path, 3 * gib);
   await withWorkspace(Directory(workPath), (work) async {
     final local = options.values.containsKey('--stage3')
@@ -252,19 +245,9 @@ Future<void> build(Options options) async {
     final kernel = await Kernel.read(artifacts);
     final kernelPayload = Directory('${work.path}/linux-eku');
     await kernel.stage(kernelPayload);
-    final glibcPayload = await Directory('${work.path}/glibc').create();
-    final glibcVersion = await stageGlibc(glibcCheckout, glibcPayload, jobs);
 
     final initrd = File('${work.path}/initrd');
-    await gentoo.install(
-      packages,
-      kernel,
-      kernelPayload,
-      glibcVersion,
-      glibcPayload,
-      passwordHash,
-      initrd,
-    );
+    await gentoo.install(packages, kernel, kernelPayload, passwordHash, initrd);
     await requireSpace(work.path, 2 * gib);
     await makeDisk(work, rootSize, output);
   });

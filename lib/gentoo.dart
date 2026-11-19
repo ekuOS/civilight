@@ -5,6 +5,9 @@ import 'eku.dart';
 
 const autobuilds = 'https://distfiles.gentoo.org/releases/amd64/autobuilds';
 const stageFlavor = 'stage3-amd64-nomultilib-systemd';
+const glibcName = 'sys-libs/glibc';
+const glibcVersion = '2.44-r4';
+const glibcSigningFingerprint = '63E58ABD12C94B1A1BBE2076B6F6212704F5903C';
 
 Future<File> stageArchive(Directory work, String keyring, String? local) async {
   final archive = File(local ?? '${work.path}/stage3.tar.xz');
@@ -104,6 +107,7 @@ class Gentoo {
       '--getbinpkg',
       '--usepkgonly',
       '--noreplace',
+      '--exclude=$glibcName',
       'llvm-core/clang',
       'llvm-core/lld',
       'llvm-core/llvm',
@@ -112,6 +116,50 @@ class Gentoo {
     await inside(['clang', '--version']);
     await inside(['ld.lld', '--version']);
     await copyPortageConfig('make.conf');
+  }
+
+  Future<void> installGlibc() async {
+    const cpv = '$glibcName-$glibcVersion';
+    final newer = await capture('chroot', [
+      root.path,
+      '/usr/bin/portageq',
+      'best_version',
+      '/',
+      '>$cpv',
+    ]);
+    if (newer.isNotEmpty) {
+      throw BuildFailure('Cannot replace $newer with the older ekuOS $cpv.');
+    }
+
+    const signingKey = 'keys/ekuos-glibc.asc';
+    for (final path in [
+      'binrepos.conf/ekuos-glibc.conf',
+      'package.accept_keywords/ekuos-glibc',
+      'package.use/ekuos-glibc',
+      'profile/package.use.mask',
+      signingKey,
+    ]) {
+      await copyPortageConfig(path);
+    }
+    await inside(['getuto']);
+    const gpg = ['gpg', '--batch', '--homedir', '/etc/portage/gnupg'];
+    await inside([...gpg, '--import', '/etc/portage/$signingKey']);
+    await inside([
+      ...gpg,
+      '--import-ownertrust',
+    ], input: '$glibcSigningFingerprint:6:\n');
+    await inside([...gpg, '--check-trustdb']);
+    await inside([
+      'FEATURES=binpkg-request-signature',
+      'emerge',
+      '--color=n',
+      '--getbinpkgonly',
+      '--binpkg-respect-use=y',
+      '--oneshot',
+      '--reinstall-atoms=$glibcName',
+      '=$cpv',
+    ]);
+    await inside(['/usr/lib64/libc.so.6']);
   }
 
   Future<void> unpack(File archive) async {
@@ -134,9 +182,9 @@ class Gentoo {
         !await Link(at('/etc/portage/make.profile')).exists() ||
         !(await Link(
           at('/etc/portage/make.profile'),
-        ).target()).endsWith('/no-multilib/systemd')) {
+        ).target()).endsWith('/default/linux/amd64/23.0/no-multilib/systemd')) {
       throw const BuildFailure(
-        'Expected a usr-merged Gentoo amd64 no-multilib systemd stage3.',
+        'Expected a usr-merged Gentoo amd64 23.0 no-multilib systemd stage3.',
       );
     }
   }
@@ -145,8 +193,6 @@ class Gentoo {
     List<String> packages,
     Kernel kernel,
     Directory kernelPayload,
-    String glibcVersion,
-    Directory glibcPayload,
     String passwordHash,
     File initrd,
   ) async {
@@ -172,6 +218,8 @@ EXTRAVERSION = $extra
           .copy(at('$kernelConfig/.config'));
       const targetKernel = 'KERNEL_DIR=$kernelConfig';
       await inside(['emerge-webrsync', '--quiet']);
+      // Install the pinned libc before resolving toolchain and image packages.
+      await installGlibc();
       await installToolchain();
       await inside([
         targetKernel,
@@ -179,6 +227,7 @@ EXTRAVERSION = $extra
         '--color=n',
         '--getbinpkg=n',
         '--usepkg=n',
+        '--exclude=$glibcName',
         '--update',
         '--newuse',
         '--oneshot',
@@ -197,23 +246,11 @@ EXTRAVERSION = $extra
           '--color=n',
           '--getbinpkg=n',
           '--usepkg=n',
+          '--exclude=$glibcName',
           ...packages,
         ]);
       }
       await Directory(at(kernelConfig)).delete(recursive: true);
-      final newerGlibc = await capture('chroot', [
-        root.path,
-        '/usr/bin/portageq',
-        'best_version',
-        '/',
-        '>$glibcName-$glibcVersion-r999999',
-      ]);
-      if (newerGlibc.isNotEmpty) {
-        throw BuildFailure(
-          'The Gentoo image needs $newerGlibc but ekuOS glibc is $glibcVersion.',
-        );
-      }
-
       await write('/var/db/repos/civilight/profiles/repo_name', 'civilight\n');
       await write('/var/db/repos/civilight/metadata/layout.conf', '''
 masters = gentoo
@@ -228,37 +265,6 @@ thin-manifests = true
         license: 'GPL-2',
         description: 'ekuOS AppArmor kernel',
       );
-      // Gentoo installs the time zone utilities through sys-libs/timezone-data.
-      for (final name in ['tzselect', 'zdump', 'zic']) {
-        final file = File('${glibcPayload.path}/usr/bin/$name');
-        if (await file.exists()) await file.delete();
-      }
-      for (final path in [
-        '/etc/env.d/00glibc',
-        '/etc/gai.conf',
-        '/etc/host.conf',
-        '/etc/nsswitch.conf',
-        '/etc/rpc',
-      ]) {
-        final existing = File(at(path));
-        final destination = File('${glibcPayload.path}$path');
-        if (await existing.exists() && !await destination.exists()) {
-          await destination.parent.create(recursive: true);
-          await existing.copy(destination.path);
-        }
-      }
-      await mergePayload(
-        glibcName,
-        glibcVersion,
-        glibcPayload,
-        slot: '2.2',
-        license: 'LGPL-2.1+ BSD HPND ISC inner-net rc PCRE',
-        description: 'ekuOS GNU C Library with mimalloc',
-        use: '+cet +multiarch +ssp +static-libs',
-      );
-      await copyPortageConfig('package.mask/civilight');
-      await inside(['ldconfig']);
-      await inside(['/usr/lib64/libc.so.6']);
       await inside(['chpasswd', '--encrypted'], input: 'root:$passwordHash\n');
       await inside([
         'dracut',
@@ -387,7 +393,6 @@ After=systemd-growfs-root.service
     required String slot,
     required String license,
     required String description,
-    String use = '',
   }) async {
     final pf = '${name.split('/').last}-$version';
     final ebuild = '/var/db/repos/civilight/$name/$pf.ebuild';
@@ -400,7 +405,6 @@ HOMEPAGE="https://github.com/ekuOS"
 LICENSE="$license"
 SLOT="$slot"
 KEYWORDS="amd64"
-IUSE="$use"
 RESTRICT="strip"
 S="\${WORKDIR}"
 ''');
@@ -408,7 +412,6 @@ S="\${WORKDIR}"
     final buildDir = '/var/tmp/portage/${name.split('/').first}/$pf';
     final packageRoot = '$buildDir/image';
     await run('cp', ['-a', '${payload.path}/.', at(packageRoot)]);
-    if (name == glibcName) await recordGlibcLinkage(buildDir);
     await inside([
       'FEATURES=noauto -binpkg-signing',
       'ebuild',
@@ -431,54 +434,5 @@ S="\${WORKDIR}"
     }
     await inside(['ebuild', '--skip-manifest', ebuild, 'clean']);
     await File(at(ebuild)).delete();
-  }
-
-  Future<void> recordGlibcLinkage(String buildDir) async {
-    // Portage's install-time ELF scan ran before Dart supplied the payload.
-    // Preserve its normal ABI index for dependency resolution and upgrades.
-    final scan = await capture('chroot', [
-      root.path,
-      '/usr/bin/scanelf',
-      '-yRBF',
-      '%a;%p;%S;%r;%n',
-      '$buildDir/image/',
-    ]);
-    final provides = <String>{};
-    final requires = <String>{};
-    final linkage = <String>[];
-    for (final line in scan.split('\n')) {
-      final fields = line.split(';');
-      if (fields.length != 5 || fields[0] != 'EM_X86_64') {
-        throw BuildFailure('Unexpected ELF metadata in ekuOS glibc: $line');
-      }
-      final path = '/${fields[1]}';
-      final soname = fields[2].isEmpty && path.endsWith('.so')
-          ? path.split('/').last
-          : fields[2];
-      final rpath = fields[3].trim() == '-' ? '' : fields[3];
-      final needed = fields[4];
-      if (soname.isNotEmpty) {
-        provides.add(soname);
-      }
-      requires.addAll(needed.split(',').where((library) => library.isNotEmpty));
-      linkage.add('X86_64;$path;$soname;$rpath;$needed;x86_64');
-    }
-    if (!provides.containsAll(['libc.so.6', 'ld-linux-x86-64.so.2'])) {
-      throw const BuildFailure(
-        'ekuOS glibc ELF metadata omits libc or its loader.',
-      );
-    }
-    await write('$buildDir/build-info/NEEDED.ELF.2', '${linkage.join('\n')}\n');
-    await write(
-      '$buildDir/build-info/PROVIDES',
-      'x86_64: ${(provides.toList()..sort()).join(' ')}',
-    );
-    requires.removeAll(provides);
-    if (requires.isNotEmpty) {
-      await write(
-        '$buildDir/build-info/REQUIRES',
-        'x86_64: ${(requires.toList()..sort()).join(' ')}',
-      );
-    }
   }
 }

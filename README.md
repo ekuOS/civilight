@@ -116,6 +116,15 @@ dart run run.dart
 dart run run.dart /path/to/civilight.raw
 ```
 
+### GitHub Actions screenshot
+
+The [Build and boot Civilight workflow](https://github.com/ekuOS/civilight/actions/workflows/image.yml)
+builds the image and boots it with UEFI and an NVMe disk in QEMU. Open a
+successful run and download `login.png` directly from **Artifacts**.
+The `civilight-qemu-logs` artifact contains `serial.log` and, if the login
+screen could not be confirmed, the last captured screen.
+The raw image and its generated root password are not uploaded.
+
 ## Write and boot
 
 Select the whole destination device carefully. The following command

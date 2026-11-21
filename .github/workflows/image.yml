@@ -1,0 +1,46 @@
+name: Build and boot Civilight
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: civilight-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+          problem-matcher: false
+      - run: dart analyze
+      - name: Build image and capture the QEMU login screen
+        run: dart run ci/build_and_capture.dart
+      - name: Upload login.png
+        uses: actions/upload-artifact@v7
+        with:
+          path: out/ci/login.png
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload QEMU diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: civilight-qemu-logs
+          path: |
+            out/ci/serial.log
+            out/ci/last-screen.png
+          if-no-files-found: ignore
+          retention-days: 14

@@ -1,13 +1,29 @@
 import 'dart:io';
 
 import 'commands.dart';
-import 'eku.dart';
 
 const autobuilds = 'https://distfiles.gentoo.org/releases/amd64/autobuilds';
 const stageFlavor = 'stage3-amd64-nomultilib-systemd';
 const glibcName = 'sys-libs/glibc';
 const glibcVersion = '2.44-r4';
 const glibcSigningFingerprint = '63E58ABD12C94B1A1BBE2076B6F6212704F5903C';
+const kernelName = 'sys-kernel/linux-eku-aa';
+const kernelRepo = 'ekuos-kernel';
+const kernelBinhost =
+    'https://ekuos.github.io/kernel/amd64/23.0/no-multilib/systemd';
+const kernelSigningFingerprint = '9420B68C629FACA5C38D1858EB89C00F0857F247';
+
+Future<void> download(String url, String path) => run('curl', [
+  '--fail',
+  '--location',
+  '--silent',
+  '--show-error',
+  '--retry',
+  '3',
+  '--output',
+  path,
+  url,
+]);
 
 Future<File> stageArchive(Directory work, String keyring, String? local) async {
   final archive = File(local ?? '${work.path}/stage3.tar.xz');
@@ -15,17 +31,6 @@ Future<File> stageArchive(Directory work, String keyring, String? local) async {
   if (local == null) {
     final index = '${work.path}/latest.txt';
     final verified = '${work.path}/latest.verified';
-    Future<void> download(String url, String path) => run('curl', [
-      '--fail',
-      '--location',
-      '--silent',
-      '--show-error',
-      '--retry',
-      '3',
-      '--output',
-      path,
-      url,
-    ]);
     await download('$autobuilds/latest-$stageFlavor.txt', index);
     await run('gpgv', ['--keyring', keyring, '--output', verified, index]);
     final path = RegExp(
@@ -107,7 +112,7 @@ class Gentoo {
       '--getbinpkg',
       '--usepkgonly',
       '--noreplace',
-      '--exclude=$glibcName',
+      '--exclude=$glibcName $kernelName',
       'llvm-core/clang',
       'llvm-core/lld',
       'llvm-core/llvm',
@@ -131,24 +136,34 @@ class Gentoo {
       throw BuildFailure('Cannot replace $newer with the older ekuOS $cpv.');
     }
 
-    const signingKey = 'keys/ekuos-glibc.asc';
     for (final path in [
       'binrepos.conf/ekuos-glibc.conf',
       'package.accept_keywords/ekuos-glibc',
       'package.use/ekuos-glibc',
       'profile/package.use.mask',
-      signingKey,
     ]) {
       await copyPortageConfig(path);
     }
     await inside(['getuto']);
-    const gpg = ['gpg', '--batch', '--homedir', '/etc/portage/gnupg'];
+    await trustSigningKey('ekuos-glibc', glibcSigningFingerprint);
+    await installBinpkg('=$cpv', ['--reinstall-atoms=$glibcName']);
+    await inside(['/usr/lib64/libc.so.6']);
+  }
+
+  static const gpg = ['gpg', '--batch', '--homedir', '/etc/portage/gnupg'];
+
+  Future<void> trustSigningKey(String name, String fingerprint) async {
+    final signingKey = 'keys/$name.asc';
+    await copyPortageConfig(signingKey);
     await inside([...gpg, '--import', '/etc/portage/$signingKey']);
-    await inside([
-      ...gpg,
-      '--import-ownertrust',
-    ], input: '$glibcSigningFingerprint:6:\n');
+    await inside([...gpg, '--import-ownertrust'], input: '$fingerprint:6:\n');
     await inside([...gpg, '--check-trustdb']);
+  }
+
+  Future<void> installBinpkg(
+    String atom, [
+    List<String> options = const [],
+  ]) async {
     await inside([
       'FEATURES=binpkg-request-signature',
       'emerge',
@@ -156,10 +171,108 @@ class Gentoo {
       '--getbinpkgonly',
       '--binpkg-respect-use=y',
       '--oneshot',
-      '--reinstall-atoms=$glibcName',
-      '=$cpv',
+      ...options,
+      atom,
     ]);
-    await inside(['/usr/lib64/libc.so.6']);
+  }
+
+  Future<void> configureKernelBinhost() async {
+    await trustSigningKey(kernelRepo, kernelSigningFingerprint);
+    final scratch = await Directory(at('/var/tmp'))
+        .createTemp('kernel-binhost-');
+    try {
+      const archive = 'overlay.tar.gz';
+      const sums = 'SHA256SUMS';
+      for (final name in [sums, '$sums.asc', archive]) {
+        await download('$kernelBinhost/$name', '${scratch.path}/$name');
+      }
+      final insideScratch =
+          '/var/tmp/${scratch.uri.pathSegments.where((s) => s.isNotEmpty).last}';
+      await inside([
+        ...gpg,
+        '--assert-signer',
+        kernelSigningFingerprint,
+        '--verify',
+        '$insideScratch/$sums.asc',
+        '$insideScratch/$sums',
+      ]);
+      final expected = RegExp(
+        r'^([0-9a-f]{64})  overlay\.tar\.gz$',
+        multiLine: true,
+      ).allMatches(await File('${scratch.path}/$sums').readAsString()).toList();
+      final file = '${scratch.path}/$archive';
+      final actual = (await capture('sha256sum', [file])).split(' ').first;
+      if (expected.length != 1 || actual != expected.single[1]) {
+        throw const BuildFailure(
+          'The ekuOS kernel overlay checksum does not match.',
+        );
+      }
+      final overlay = await Directory(at('/var/db/repos/$kernelRepo')).create();
+      await run('tar', [
+        '--extract',
+        '--no-same-owner',
+        '--file',
+        file,
+        '--directory',
+        overlay.path,
+      ]);
+    } finally {
+      await scratch.delete(recursive: true);
+    }
+    for (final path in [
+      'binrepos.conf/$kernelRepo.conf',
+      'repos.conf/$kernelRepo.conf',
+      'package.accept_keywords/$kernelRepo',
+    ]) {
+      await copyPortageConfig(path);
+    }
+  }
+
+  Future<String> installedKernelRelease() async {
+    final cpv = await capture('chroot', [
+      root.path,
+      '/usr/bin/portageq',
+      'best_version',
+      '/',
+      '$kernelName::$kernelRepo',
+    ]);
+    final version = RegExp(
+      '^$kernelName-(\\d+\\.\\d+(?:\\.\\d+)?)(?:-r\\d+)?\$',
+    ).firstMatch(cpv)?[1];
+    if (version == null) {
+      throw BuildFailure(
+        'Could not identify the installed kernel from $kernelRepo: $cpv.',
+      );
+    }
+    final release = '$version-eku-aa';
+    final modules = '/usr/lib/modules/$release';
+    final config = File(at('/boot/config-$release'));
+    for (final path in [
+      config.path,
+      at('/boot/vmlinuz-$release'),
+      at('$modules/modules.dep.bin'),
+    ]) {
+      if (!await File(path).exists() || await File(path).length() == 0) {
+        throw BuildFailure('The $release binpkg is missing $path.');
+      }
+    }
+    final options = (await config.readAsLines()).toSet();
+    for (final option in [
+      'BTRFS_FS',
+      'BLK_DEV_NVME',
+      'EFI_STUB',
+      'BLK_DEV_INITRD',
+      'SECURITY_APPARMOR',
+      'MODULE_SIG_FORCE',
+    ]) {
+      if (!options.contains('CONFIG_$option=y')) {
+        throw BuildFailure(
+          'The $release binpkg requires CONFIG_$option=y to build Civilight.',
+        );
+      }
+    }
+    // mkosi uses the versioned image in /boot and copies it to the module tree.
+    return release;
   }
 
   Future<void> unpack(File archive) async {
@@ -191,35 +304,33 @@ class Gentoo {
 
   Future<void> install(
     List<String> packages,
-    Kernel kernel,
-    Directory kernelPayload,
     String passwordHash,
     File initrd,
   ) async {
+    late String release;
     await withMounts(() async {
       await File('/etc/resolv.conf').copy(at('/etc/resolv.conf'));
       await copyPortageConfig('package.use/civilight');
+      await inside(['emerge-webrsync', '--quiet']);
+      await installGlibc();
+      await configureKernelBinhost();
+      await installBinpkg('$kernelName::$kernelRepo', [
+        '--reinstall-atoms=$kernelName',
+      ]);
+      release = await installedKernelRelease();
       // linux-info.eclass must check the target configuration during emerge,
-      // including when AppArmor is installed from a binary package.
-      const kernelConfig = '/usr/src/linux';
-      final numbers = kernel.release.split('-').first.split('.');
-      final extra = RegExp(r'-rc[0-9]+').firstMatch(kernel.release)?[0] ?? '';
+      // but the kernel binpkg does not ship a build tree.
+      const kernelConfig = '/var/tmp/civilight-kernel-config';
+      final numbers = release.split('-').first.split('.');
       await write('$kernelConfig/Makefile', '''
 VERSION = ${numbers[0]}
 PATCHLEVEL = ${numbers[1]}
 SUBLEVEL = ${numbers.length == 3 ? numbers[2] : '0'}
-EXTRAVERSION = $extra
+EXTRAVERSION =
 ''');
-      await write(
-        '$kernelConfig/include/config/kernel.release',
-        '${kernel.release}\n',
-      );
-      await File('${kernel.artifacts.path}/.config')
-          .copy(at('$kernelConfig/.config'));
+      await write('$kernelConfig/include/config/kernel.release', '$release\n');
+      await File(at('/boot/config-$release')).copy(at('$kernelConfig/.config'));
       const targetKernel = 'KERNEL_DIR=$kernelConfig';
-      await inside(['emerge-webrsync', '--quiet']);
-      // Install the pinned libc before resolving toolchain and image packages.
-      await installGlibc();
       await installToolchain();
       await inside([
         targetKernel,
@@ -227,7 +338,7 @@ EXTRAVERSION = $extra
         '--color=n',
         '--getbinpkg=n',
         '--usepkg=n',
-        '--exclude=$glibcName',
+        '--exclude=$glibcName $kernelName',
         '--update',
         '--newuse',
         '--oneshot',
@@ -246,25 +357,11 @@ EXTRAVERSION = $extra
           '--color=n',
           '--getbinpkg=n',
           '--usepkg=n',
-          '--exclude=$glibcName',
+          '--exclude=$glibcName $kernelName',
           ...packages,
         ]);
       }
       await Directory(at(kernelConfig)).delete(recursive: true);
-      await write('/var/db/repos/civilight/profiles/repo_name', 'civilight\n');
-      await write('/var/db/repos/civilight/metadata/layout.conf', '''
-masters = gentoo
-thin-manifests = true
-''');
-      await copyPortageConfig('repos.conf/civilight.conf');
-      await mergePayload(
-        kernelName,
-        kernel.version,
-        kernelPayload,
-        slot: '0',
-        license: 'GPL-2',
-        description: 'ekuOS AppArmor kernel',
-      );
       await inside(['chpasswd', '--encrypted'], input: 'root:$passwordHash\n');
       await inside([
         'dracut',
@@ -273,7 +370,7 @@ thin-manifests = true
         '--no-hostonly-cmdline',
         '--no-early-microcode',
         '--kver',
-        kernel.release,
+        release,
         '/var/tmp/civilight.initrd',
       ]);
       await File(at('/var/tmp/civilight.initrd')).rename(initrd.path);
@@ -316,10 +413,7 @@ After=systemd-growfs-root.service
     );
     await Directory(at('/efi')).create();
     await run('chmod', ['0700', at('/efi')]);
-    await write(
-      '/efi/loader/loader.conf',
-      'default civilight-${kernel.release}.efi\n',
-    );
+    await write('/efi/loader/loader.conf', 'default civilight-$release.efi\n');
     await write('/etc/machine-id', '');
   }
 
@@ -384,55 +478,5 @@ After=systemd-growfs-root.service
         await run('umount', ['--lazy', mount]);
       }
     }
-  }
-
-  Future<void> mergePayload(
-    String name,
-    String version,
-    Directory payload, {
-    required String slot,
-    required String license,
-    required String description,
-  }) async {
-    final pf = '${name.split('/').last}-$version';
-    final ebuild = '/var/db/repos/civilight/$name/$pf.ebuild';
-    // Dart supplies the prepared image after the empty install phase.
-    // Portage then packages it and merges it through its binary package path.
-    await write(ebuild, '''
-EAPI=8
-DESCRIPTION="$description"
-HOMEPAGE="https://github.com/ekuOS"
-LICENSE="$license"
-SLOT="$slot"
-KEYWORDS="amd64"
-RESTRICT="strip"
-S="\${WORKDIR}"
-''');
-    await inside(['ebuild', '--skip-manifest', ebuild, 'clean', 'install']);
-    final buildDir = '/var/tmp/portage/${name.split('/').first}/$pf';
-    final packageRoot = '$buildDir/image';
-    await run('cp', ['-a', '${payload.path}/.', at(packageRoot)]);
-    await inside([
-      'FEATURES=noauto -binpkg-signing',
-      'ebuild',
-      '--skip-manifest',
-      ebuild,
-      'package',
-    ]);
-    await inside([
-      'emerge',
-      '--color=n',
-      '--usepkgonly',
-      '--oneshot',
-      '--nodeps',
-      '=$name-$version::civilight',
-    ]);
-    final installed = '/var/db/pkg/${name.split('/').first}/$pf';
-    if ((await File(at('$installed/repository')).readAsString()).trim() !=
-        'civilight') {
-      throw BuildFailure('Portage did not record $name from civilight.');
-    }
-    await inside(['ebuild', '--skip-manifest', ebuild, 'clean']);
-    await File(at(ebuild)).delete();
   }
 }

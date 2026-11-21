@@ -11,24 +11,16 @@ the build.
 - An x86-64 Linux host, Dart SDK 3, mkosi 26, and the systemd host tools
   including `systemd-repart`, `systemd-firstboot`, `bootctl`, and `ukify`.
 - GNU coreutils and tar, util-linux with `unshare --map-auto`, `curl`, `gpgv`,
-  `kmod` with `depmod --moduledir`, `btrfs-progs`, `dosfstools`, `mtools`,
-  and the build dependencies listed in the kernel repository.
-- Network access for Gentoo, the ekuOS glibc binhost, and the kernel sources.
+  `btrfs-progs`, `dosfstools`, and `mtools`.
+- Network access for Gentoo and the ekuOS glibc and kernel binhosts.
   An unprivileged build requires subordinate UID and GID allocations and
   working `newuidmap` and `newgidmap` helpers. The script also accepts execution
   as root.
 - At least 12 GiB free in the build workspace, with more space for large
   package selections. The output filesystem needs room for the raw image
   when it is on a separate volume.
-  The kernel checkout also needs room for its source tree. The script
-  reports insufficient space and out-of-space tool failures on stderr.
-
-Place the kernel checkout next to this repository, or pass `--kernel DIR`.
-No local glibc checkout is needed.
-
-```sh
-git clone https://github.com/ekuOS/kernel ../kernel
-```
+  The script reports insufficient space and out-of-space tool failures on
+  stderr. No local kernel or glibc checkout is needed.
 
 ## Build
 
@@ -75,14 +67,17 @@ missing dependencies from source with that toolchain, without replacing glibc.
 
 [ekuOS glibc binhost]: https://github.com/ekuOS/glibc/blob/main/packaging/gentoo/README.md
 
-The kernel builder uses the AppArmor flavor and its default `eku.conf`.
-Use a kernel checkout whose default profile enables Btrfs and NVMe.
-Use `--kernel-artifacts DIR` to reuse a compatible
-`linux-eku-aa` artifact bundle. The image registers it with Portage as
-`sys-kernel/linux-eku`. The kernel binpkg and the downloaded glibc binpkg are
-retained in the image's Portage caches. The ekuOS binhost remains configured in
-the image. The package keeps Gentoo's repository identity and slot, so a normal
-source upgrade after boot may replace it.
+The builder verifies the [ekuOS kernel binhost] overlay and installs the
+signed AppArmor package `sys-kernel/linux-eku-aa::ekuos-kernel`, without falling
+back to a source build. The published kernel must have Btrfs and NVMe built in.
+If the binhost still serves an older build without them, Civilight stops until
+the compatible package is published.
+Civilight generates the initramfs and unified kernel image for the installed
+kernel release. Both binpkgs and binhost settings remain in the image. The
+glibc package keeps Gentoo's repository identity and slot, so a normal source
+upgrade after boot may replace it.
+
+[ekuOS kernel binhost]: https://github.com/ekuOS/kernel/blob/main/packaging/gentoo/README.md
 
 The default output is `out/civilight.raw`. Temporary workspaces are created in
 the output directory by default. Use `--temp-dir DIR` to put workspaces on a
@@ -140,6 +135,6 @@ packages.
 uname -r
 findmnt -no FSTYPE /
 cat /sys/kernel/security/lsm
-portageq match / sys-kernel/linux-eku
+portageq match / sys-kernel/linux-eku-aa
 portageq match / sys-libs/glibc
 ```

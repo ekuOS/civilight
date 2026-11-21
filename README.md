@@ -67,8 +67,9 @@ The builder installs Clang, LLD, and LLVM from Gentoo's signed binary
 repository. Portage then builds the image's additional packages and their
 missing dependencies from source with that toolchain, without replacing glibc.
 
-The image uses [uutils coreutils](https://github.com/uutils/coreutils) at the
-standard `/usr/bin` paths. Before generating the initramfs, Portage replaces
+Every image build, including GitHub Actions and builds with a custom
+`--packages` file, uses [uutils coreutils](https://github.com/uutils/coreutils)
+at the standard `/usr/bin` paths. Before generating the initramfs, Portage replaces
 the stage3's GNU implementation with `sys-apps/coreutils::civilight`, a package
 of command links depending on `sys-apps/uutils-coreutils`. The GNU package
 `sys-apps/coreutils::gentoo` is masked, including for future updates.

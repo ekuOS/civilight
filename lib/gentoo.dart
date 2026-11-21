@@ -175,6 +175,12 @@ class Gentoo {
     ]);
     if (gnu.isNotEmpty)
       throw BuildFailure('GNU coreutils is still installed: $gnu');
+    await inside([
+      'portageq',
+      'has_version',
+      '/',
+      'sys-apps/coreutils::civilight[xattr]',
+    ]);
     for (final utility in ['ls', 'cp', 'stat']) {
       final version = await capture('chroot', [
         root.path,

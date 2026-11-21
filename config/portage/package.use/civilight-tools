@@ -1,0 +1,2 @@
+app-admin/sudo-rs system-names -su
+sys-apps/uutils-coreutils -selinux

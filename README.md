@@ -67,6 +67,13 @@ The builder installs Clang, LLD, and LLVM from Gentoo's signed binary
 repository. Portage then builds the image's additional packages and their
 missing dependencies from source with that toolchain, without replacing glibc.
 
+The image uses [uutils coreutils](https://github.com/uutils/coreutils) on the
+default login `PATH`: `/usr/local/bin` takes precedence over `/usr/bin`.
+Gentoo's mandatory GNU coreutils package remains installed for compatibility
+with Portage and scripts that use absolute paths. `sudo` and `visudo` come
+from [sudo-rs](https://github.com/trifectatechfoundation/sudo-rs); `su` is
+unchanged. The build host still uses its own tools.
+
 [ekuOS glibc binhost]: https://github.com/ekuOS/glibc/blob/main/packaging/gentoo/README.md
 
 The builder verifies the [ekuOS kernel binhost] overlay and installs the

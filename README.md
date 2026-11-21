@@ -10,8 +10,10 @@ the build.
 
 - An x86-64 Linux host, Dart SDK 3, mkosi 26, and the systemd host tools
   including `systemd-repart`, `systemd-firstboot`, `bootctl`, and `ukify`.
-- GNU coreutils and tar, util-linux with `unshare --map-auto`, `curl`, `gpgv`,
+- GNU coreutils and tar, util-linux with `unshare --map-auto` and `sfdisk`, `curl`, `gpgv`,
   `btrfs-progs`, `dosfstools`, and `mtools`.
+  The host's `iconv` must support CP850 for FAT image creation. On Fedora,
+  install `glibc-gconv-extra` if this code page is missing.
 - Network access for Gentoo and the ekuOS glibc and kernel binhosts.
   An unprivileged build requires subordinate UID and GID allocations and
   working `newuidmap` and `newgidmap` helpers. The script also accepts execution
@@ -69,11 +71,14 @@ missing dependencies from source with that toolchain, without replacing glibc.
 
 The builder verifies the [ekuOS kernel binhost] overlay and installs the
 signed AppArmor package `sys-kernel/linux-eku-aa::ekuos-kernel`, without falling
-back to a source build. The published kernel must have Btrfs and NVMe built in.
+back to a source build. The published kernel must have Btrfs, NVMe, and the
+UEFI framebuffer console built in.
 If the binhost still serves an older build without them, Civilight stops until
 the compatible package is published.
 Civilight generates the initramfs and unified kernel image for the installed
-kernel release. Both binpkgs and binhost settings remain in the image. The
+kernel release. Before publishing the image, it checks the UEFI fallback
+loader and verifies that the unified kernel image points to the GPT root
+partition by PARTUUID. Both binpkgs and binhost settings remain in the image. The
 glibc package keeps Gentoo's repository identity and slot, so a normal source
 upgrade after boot may replace it.
 
@@ -123,10 +128,11 @@ sudo dd if=out/civilight.raw of=/dev/sdX bs=16M status=progress conv=fsync
 ```
 
 Boot the device in x86-64 UEFI mode with Secure Boot disabled. The firmware
-can use the standard EFI fallback path without a preconfigured boot entry.
-The root filesystem grows to fill its partition at boot. Ethernet DHCP is
-enabled. Include any hardware-specific firmware packages in
-`packages.conf` before building for that hardware.
+can use `EFI/BOOT/BOOTX64.EFI` without a preconfigured boot entry. Use a
+directly attached NVMe or SATA drive, or a UEFI-bootable USB drive. On a
+larger drive, the root partition and Btrfs filesystem grow at boot.
+Ethernet DHCP is enabled. Include any hardware-specific firmware packages
+in `packages.conf` before building for that hardware.
 
 After signing in, check the running kernel, filesystem, and installed
 packages.

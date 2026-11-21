@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'lib/commands.dart';
 import 'lib/gentoo.dart';
+import 'lib/image.dart';
 import 'lib/workspace.dart';
 
 const usage = '''
@@ -84,7 +85,12 @@ class Options {
   Directory get workParent => Directory(path('--temp-dir', output.parent.path));
 }
 
-Future<void> makeDisk(Directory work, int rootSize, File output) async {
+Future<void> makeDisk(
+  Directory work,
+  int rootSize,
+  String kernelRelease,
+  File output,
+) async {
   final osRelease = File('${work.path}/root/usr/lib/os-release');
   final release = (await osRelease.readAsLines()).where(
     (line) => !line.startsWith('NAME=') && !line.startsWith('PRETTY_NAME='),
@@ -175,6 +181,7 @@ WorkspaceDirectory=workspace
   if (!await image.exists() || await image.length() == 0) {
     throw const BuildFailure('mkosi did not produce the raw disk image.');
   }
+  await verifyBootImage(image, kernelRelease, work);
   await run('chmod', ['0600', image.path]);
   await publishImage(image, output);
   stdout.writeln('Image written to ${output.path}');
@@ -201,6 +208,20 @@ Future<void> build(Options options) async {
       options.path('--packages', script.resolve('packages.conf').toFilePath()),
     ),
   );
+  // Check this before the Portage build: mtools needs it to populate the ESP.
+  final fatCodepage = await Process.run('iconv', [
+    '-f',
+    'UTF-8',
+    '-t',
+    'CP850',
+    '/dev/null',
+  ]);
+  if (fatCodepage.exitCode != 0) {
+    throw const BuildFailure(
+      'Host iconv lacks CP850 support for the EFI partition. '
+      'On Fedora, install glibc-gconv-extra.',
+    );
+  }
   final output = options.output;
   if (!output.path.endsWith('.raw')) {
     throw const BuildFailure('--output must end with .raw.');
@@ -226,9 +247,9 @@ Future<void> build(Options options) async {
     await gentoo.unpack(archive);
 
     final initrd = File('${work.path}/initrd');
-    await gentoo.install(packages, passwordHash, initrd);
+    final kernelRelease = await gentoo.install(packages, passwordHash, initrd);
     await requireSpace(work.path, 2 * gib);
-    await makeDisk(work, rootSize, output);
+    await makeDisk(work, rootSize, kernelRelease, output);
   });
 }
 

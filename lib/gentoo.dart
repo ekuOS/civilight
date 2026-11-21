@@ -261,6 +261,9 @@ class Gentoo {
       'BTRFS_FS',
       'BLK_DEV_NVME',
       'EFI_STUB',
+      'DRM_EFIDRM',
+      'DRM_FBDEV_EMULATION',
+      'FRAMEBUFFER_CONSOLE',
       'BLK_DEV_INITRD',
       'SECURITY_APPARMOR',
       'MODULE_SIG_FORCE',
@@ -302,7 +305,7 @@ class Gentoo {
     }
   }
 
-  Future<void> install(
+  Future<String> install(
     List<String> packages,
     String passwordHash,
     File initrd,
@@ -403,11 +406,17 @@ enable systemd-resolved.service
     await write('/etc/fstab', '''
 PARTLABEL=civilight-esp /efi vfat umask=0077,nofail,x-systemd.automount 0 2
 ''');
+    // On a larger target disk, enlarge the existing root GPT partition before
+    // growing the mounted Btrfs filesystem. Leave the ESP untouched.
+    await write('/etc/repart.d/10-civilight-root.conf', '''
+[Partition]
+Type=root
+''');
     await write(
       '/etc/systemd/system/local-fs.target.d/civilight-growfs.conf',
       '''
 [Unit]
-Wants=systemd-growfs-root.service
+Wants=systemd-repart.service systemd-growfs-root.service
 After=systemd-growfs-root.service
 ''',
     );
@@ -415,6 +424,7 @@ After=systemd-growfs-root.service
     await run('chmod', ['0700', at('/efi')]);
     await write('/efi/loader/loader.conf', 'default civilight-$release.efi\n');
     await write('/etc/machine-id', '');
+    return release;
   }
 
   Future<void> withMounts(Future<void> Function() action) async {

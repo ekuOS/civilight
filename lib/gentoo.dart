@@ -146,6 +146,8 @@ class Gentoo {
       'app-admin/sudo-rs',
     ]);
     await inside(['/usr/bin/sudo', '--version']);
+    // Gentoo's sudo-rs ebuild can install the file as 0644; visudo wants 0440.
+    await run('chmod', ['0440', at('/etc/sudoers-rs')]);
     await inside(['/usr/bin/visudo', '--check']);
   }
 

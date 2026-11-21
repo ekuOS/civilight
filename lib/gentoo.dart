@@ -151,34 +151,38 @@ class Gentoo {
     await inside(['/usr/bin/visudo', '--check']);
   }
 
-  Future<void> preferUutils() async {
-    // Gentoo's @system still requires GNU coreutils. Keep those files under
-    // Portage's control and use the login PATH to prefer the packaged applets.
-    final binaries = Directory(at('/usr/bin'));
-    final prefix = await Directory(at('/usr/local/bin'))
-        .create(recursive: true);
-    final applet = RegExp(r'^uu-([a-z0-9][a-z0-9-]*|\[)$');
-    await for (final file in binaries.list(followLinks: false)) {
-      final name = file.uri.pathSegments.last;
-      final match = applet.firstMatch(name);
-      if (match == null) continue;
-      final alias = Link('${prefix.path}/${match[1]}');
-      if (await FileSystemEntity.type(alias.path, followLinks: false) !=
-          FileSystemEntityType.notFound) {
-        throw BuildFailure('Cannot install uutils alias over ${alias.path}.');
-      }
-      await alias.create('../../bin/$name');
-    }
-    // Verify representative commands through the same PATH used at login.
+  Future<void> replaceGnuCoreutils() async {
+    await run('cp', [
+      '-a',
+      '${portageConfig.parent.path}/repos/civilight',
+      at('/var/db/repos/'),
+    ]);
+    await copyPortageConfig('repos.conf/civilight.conf');
+    await copyPortageConfig('package.mask/civilight-coreutils');
+    await inside([
+      'emerge',
+      '--oneshot',
+      '--getbinpkg=n',
+      '--usepkg=n',
+      'sys-apps/coreutils::civilight',
+    ]);
+    final gnu = await capture('chroot', [
+      root.path,
+      '/usr/bin/portageq',
+      'best_version',
+      '/',
+      'sys-apps/coreutils::gentoo',
+    ]);
+    if (gnu.isNotEmpty)
+      throw BuildFailure('GNU coreutils is still installed: $gnu');
     for (final utility in ['ls', 'cp', 'stat']) {
-      await inside([
-        '/usr/bin/env',
-        'PATH=/usr/local/bin:/usr/bin',
-        utility,
+      final version = await capture('chroot', [
+        root.path,
+        '/usr/bin/$utility',
         '--version',
       ]);
-      if (!await Link('${prefix.path}/$utility').exists()) {
-        throw BuildFailure('The uutils package did not supply $utility.');
+      if (!version.contains('uutils coreutils')) {
+        throw BuildFailure('/usr/bin/$utility is not provided by uutils.');
       }
     }
   }
@@ -426,6 +430,7 @@ EXTRAVERSION =
         ]);
       }
       await Directory(at(kernelConfig)).delete(recursive: true);
+      await replaceGnuCoreutils();
       await inside(['chpasswd', '--encrypted'], input: 'root:$passwordHash\n');
       await inside([
         'dracut',
@@ -438,7 +443,6 @@ EXTRAVERSION =
         '/var/tmp/civilight.initrd',
       ]);
       await File(at('/var/tmp/civilight.initrd')).rename(initrd.path);
-      await preferUutils();
       final buildState = Directory(at('/var/tmp/portage'));
       if (await buildState.exists()) await buildState.delete(recursive: true);
       if (!await File(at('/usr/lib/systemd/boot/efi/systemd-bootx64.efi'))

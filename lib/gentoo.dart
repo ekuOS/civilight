@@ -376,6 +376,7 @@ class Gentoo {
       await File('/etc/resolv.conf').copy(at('/etc/resolv.conf'));
       for (final path in [
         'package.use/civilight',
+        'package.mask/civilight-llvm',
         'package.env/civilight',
         'env/apparmor-libstdcxx.conf',
       ]) {

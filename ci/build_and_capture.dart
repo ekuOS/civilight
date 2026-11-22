@@ -22,9 +22,14 @@ Future<void> inside(String? flavor) async {
     'mkosi',
     'mtools',
     'openssl',
-    loginScreen == LoginScreen.gdm || loginScreen == LoginScreen.sddm
-        ? 'qemu-system-x86'
-        : 'qemu-system-x86-core',
+    if (loginScreen == LoginScreen.gdm || loginScreen == LoginScreen.sddm) ...[
+      'qemu-system-x86',
+      'mesa-dri-drivers',
+      'mesa-libEGL',
+      'libglvnd-egl',
+      'virglrenderer',
+    ] else
+      'qemu-system-x86-core',
     'systemd',
     'systemd-udev',
     'systemd-ukify',

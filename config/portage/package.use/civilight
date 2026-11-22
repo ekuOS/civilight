@@ -2,3 +2,8 @@
 dev-libs/glib -introspection
 sys-apps/systemd boot kernel-install apparmor
 sys-kernel/dracut systemd
+
+# Keep the desktop stack on the stage3 LLVM 22 slot.
+llvm-runtimes/libclc llvm_slot_22 -llvm_slot_23
+dev-util/mesa_clc llvm_slot_22 -llvm_slot_23
+media-libs/mesa llvm_slot_22 -llvm_slot_23

@@ -42,7 +42,7 @@ jobs:
       - name: Build minimal image and capture console login
         if: matrix.src == ''
         run: dart run ci/build_and_capture.dart
-      - name: Build flavor image and capture graphical login
+      - name: Build flavor image and capture its login screen
         if: matrix.src != ''
         env:
           FLAVOR: ${{ matrix.src }}
@@ -51,7 +51,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}-screenshot
-          path: out/ci/${{ matrix.name }}/${{ matrix.src == '' && 'login.png' || 'gui.png' }}
+          path: out/ci/${{ matrix.name }}/${{ (matrix.login == 'gdm' || matrix.login == 'sddm') && 'gui.png' || 'login.png' }}
           if-no-files-found: error
           retention-days: 14
       - name: Upload QEMU diagnostics

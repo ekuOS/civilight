@@ -74,6 +74,15 @@ before generating the initramfs. Modes and symbolic links are preserved.
 Desktop packages can use compatible signed Gentoo binaries or be built from
 source; allow substantially more build time and disk space than for minimal.
 
+Each flavor keeps its own display manager: GNOME uses GDM, Plasma uses SDDM,
+and Sway uses greetd with the tuigreet terminal greeter. CI verifies the
+matching login screen for each directory under `src/`; unknown flavor names
+need a matching check in `ci/capture_login.dart`.
+The Sway overlay selects tty2 in `overlay/etc/greetd/config.toml`, and
+`overlay/etc/systemd/system/greetd.service.d/tty2.conf` resets the packaged
+unit's tty1 conflict before adding tty2 conflicts. This keeps the boot console
+visible on tty1; greetd switches to tty2 for the greeter.
+
 Edit [config/portage](config/portage) to change the image's Portage settings.
 After unpacking the signed stage3, Portage replaces its C library with
 `sys-libs/glibc-2.44-r4` from the [ekuOS glibc binhost] for `23.0/llvm/systemd`.
@@ -152,9 +161,10 @@ dart run run.dart /path/to/civilight.raw
 The [Build and boot Civilight workflow](https://github.com/ekuOS/civilight/actions/workflows/image.yml)
 discovers the directories immediately under `src/` and builds each one in
 parallel with the minimal image. Each image boots with UEFI and NVMe in QEMU.
-Download `flavor-NAME-screenshot` for the verified LightDM graphical login
-screen (`gui.png`), or `minimal-screenshot` for console login (`login.png`).
-This checks GUI startup to the greeter, not an authenticated user session.
+Download `flavor-NAME-screenshot` for the verified login screen. GNOME and
+Plasma use LightDM (`gui.png`); Sway starts greetd with tuigreet on tty2
+(`login.png`), leaving tty1 available for the boot console. `minimal-screenshot`
+contains the regular console login. These checks do not sign in to a session.
 Each job also publishes its own serial log and last screen on boot timeout.
 The raw image and its generated root password are not uploaded.
 

@@ -1,1 +1,1 @@
-enable lightdm.service
+enable greetd.service

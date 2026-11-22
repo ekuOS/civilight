@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../lib/flavor.dart';
+import 'capture_login.dart' show loginScreenFor;
 
 Future<void> main() async {
   final src = Directory.fromUri(Platform.script.resolve('../src/'));
@@ -15,8 +16,13 @@ Future<void> main() async {
   names.sort();
   final matrix = jsonEncode({
     'include': [
-      {'name': 'minimal', 'src': ''},
-      for (final name in names) {'name': 'flavor-$name', 'src': name},
+      {'name': 'minimal', 'src': '', 'login': 'console'},
+      for (final name in names)
+        {
+          'name': 'flavor-$name',
+          'src': name,
+          'login': loginScreenFor(name).name,
+        },
     ],
   });
   final output = Platform.environment['GITHUB_OUTPUT'];

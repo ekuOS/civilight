@@ -1,1 +1,1 @@
-enable lightdm.service
+enable sddm.service

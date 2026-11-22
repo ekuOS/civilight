@@ -4,6 +4,55 @@ import 'dart:io';
 
 import '../lib/commands.dart';
 
+/// Count distinct colours in a binary PPM screenshot. The Linux text console
+/// uses a tiny fixed palette, while a graphical greeter has antialiased text
+/// and background shading. This is independent of OCR accuracy and locale.
+Future<int> distinctColors(File ppm) async {
+  final bytes = await ppm.readAsBytes();
+  var offset = 0;
+  String token() {
+    while (offset < bytes.length &&
+        const [32, 9, 10, 13].contains(bytes[offset])) {
+      offset++;
+    }
+    if (bytes[offset] == 35) {
+      while (offset < bytes.length && bytes[offset] != 10) {
+        offset++;
+      }
+      return token();
+    }
+    final start = offset;
+    while (offset < bytes.length &&
+        !const [32, 9, 10, 13].contains(bytes[offset])) {
+      offset++;
+    }
+    return ascii.decode(bytes.sublist(start, offset));
+  }
+
+  if (token() != 'P6') throw const BuildFailure('Unexpected PPM header.');
+  final width = int.parse(token());
+  final height = int.parse(token());
+  if (int.parse(token()) != 255) {
+    throw const BuildFailure('Unexpected PPM depth.');
+  }
+  while (offset < bytes.length &&
+      const [32, 9, 10, 13].contains(bytes[offset])) {
+    offset++;
+  }
+  final pixels = width * height;
+  if (bytes.length - offset < pixels * 3) {
+    throw const BuildFailure('Truncated PPM screenshot.');
+  }
+  final colors = <int>{};
+  final step = pixels > 100000 ? pixels ~/ 100000 : 1;
+  for (var pixel = 0; pixel < pixels; pixel += step) {
+    final at = offset + pixel * 3;
+    colors.add((bytes[at] << 16) | (bytes[at + 1] << 8) | bytes[at + 2]);
+    if (colors.length > 4000) break;
+  }
+  return colors.length;
+}
+
 class Qmp {
   Qmp(this.socket)
     : messages = StreamIterator(
@@ -44,18 +93,31 @@ class Qmp {
   }
 }
 
+enum LoginScreen { console, gdm, sddm, tuigreet }
+
+/// Each desktop flavor is verified through its own display manager.
+LoginScreen loginScreenFor(String? flavor) => switch (flavor) {
+  null => LoginScreen.console,
+  'gnome' => LoginScreen.gdm,
+  'plasma' => LoginScreen.sddm,
+  'sway' => LoginScreen.tuigreet,
+  _ => throw BuildFailure('Add a login screen check for flavor $flavor.'),
+};
+
 Future<void> captureLogin(
   File image,
   File firmware,
   Directory artifacts, {
-  bool gui = false,
+  LoginScreen loginScreen = LoginScreen.console,
 }) async {
+  final gui = loginScreen == LoginScreen.gdm || loginScreen == LoginScreen.sddm;
   await artifacts.create(recursive: true);
   final scratch = await Directory.systemTemp.createTemp('civilight-qemu-');
   try {
     final monitor = '${scratch.path}/qmp';
     final serial = File('${artifacts.path}/serial.log');
     final screen = File('${scratch.path}/screen.png');
+    final ppm = File('${scratch.path}/screen.ppm');
     final qemu = await Process.start('qemu-system-x86_64', [
       if (Platform.environment['QEMU_FIRMWARE_DIR'] case final String path) ...[
         '-L',
@@ -96,7 +158,7 @@ Future<void> captureLogin(
       final deadline = DateTime.now().add(Duration(minutes: gui ? 15 : 8));
       while (DateTime.now().isBefore(deadline)) {
         if (stopped != null) throw BuildFailure('QEMU exited ($stopped).');
-        if ((gui &&
+        if ((loginScreen != LoginScreen.console &&
                 await FileSystemEntity.type(monitor) !=
                     FileSystemEntityType.notFound) ||
             (await serial.exists() &&
@@ -119,19 +181,38 @@ Future<void> captureLogin(
             'filename': screen.path,
             'format': 'png',
           });
+          await qmp.command('screendump', {
+            'filename': ppm.path,
+            'format': 'ppm',
+          });
+          final colors = await distinctColors(ppm);
+          stdout.writeln('Guest screen has $colors distinct colours.');
           final text = await capture('tesseract', [
             screen.path,
             'stdout',
             '--psm',
             '11',
           ]);
+          await File('${artifacts.path}/screen.txt').writeAsString(text);
           final prompt = RegExp(r'\bcivilight\s+login\b', caseSensitive: false);
-          // LightDM's GTK greeter draws a "Log In" button. Never accept
-          // a framebuffer getty or a serial login as proof of GUI startup.
-          final ready = gui
-              ? !prompt.hasMatch(text) &&
-                    RegExp(r'\blog\s+in\b', caseSensitive: false).hasMatch(text)
-              : prompt.hasMatch(text);
+          // Never accept the tty1 getty behind a greeter. The greeters differ
+          // in wording and OCR quality, so accept any of their own labels.
+          final ready = switch (loginScreen) {
+            LoginScreen.console => prompt.hasMatch(text),
+            LoginScreen.gdm || LoginScreen.sddm =>
+              !prompt.hasMatch(text) &&
+                  (colors > 32 ||
+                      RegExp(
+                        r'\b(?:log\s*in|login|password|username|not\s+listed)\b',
+                        caseSensitive: false,
+                      ).hasMatch(text)),
+            LoginScreen.tuigreet =>
+              !prompt.hasMatch(text) &&
+                  RegExp(
+                    r'\b(?:username|sway|password)\b',
+                    caseSensitive: false,
+                  ).hasMatch(text),
+          };
           if (ready) {
             final screenshot = await screen.copy(
               '${artifacts.path}/${gui ? 'gui' : 'login'}.png',
@@ -142,13 +223,26 @@ Future<void> captureLogin(
             return;
           }
         }
-        await Future<void>.delayed(const Duration(seconds: 2));
+        await Future<void>.delayed(
+          Duration(seconds: loginScreen == LoginScreen.console ? 2 : 5),
+        );
       }
       if (await screen.exists()) {
         await screen.copy('${artifacts.path}/last-screen.png');
       }
-      throw const BuildFailure(
-        'QEMU did not show the graphical login prompt. See the boot artifacts.',
+      if (await serial.exists()) {
+        final boot = utf8.decode(
+          await serial.readAsBytes(),
+          allowMalformed: true,
+        );
+        final lines = const LineSplitter().convert(boot);
+        stdout.writeln('--- last serial output ---');
+        stdout.writeln(
+          lines.skip(lines.length > 40 ? lines.length - 40 : 0).join('\n'),
+        );
+      }
+      throw BuildFailure(
+        'QEMU did not show the ${loginScreen.name} login prompt. See the boot artifacts.',
       );
     } finally {
       await qmp?.close();

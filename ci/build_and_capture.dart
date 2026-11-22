@@ -8,6 +8,7 @@ const weeklyKey = '13EBBDBEDE7A12775DFDB1BABB572E0E2D182910';
 
 Future<void> inside(String? flavor) async {
   final dart = Platform.resolvedExecutable;
+  final loginScreen = loginScreenFor(flavor);
   await run('dnf', [
     '-y',
     'install',
@@ -21,7 +22,9 @@ Future<void> inside(String? flavor) async {
     'mkosi',
     'mtools',
     'openssl',
-    flavor == null ? 'qemu-system-x86-core' : 'qemu-system-x86',
+    loginScreen == LoginScreen.gdm || loginScreen == LoginScreen.sddm
+        ? 'qemu-system-x86'
+        : 'qemu-system-x86-core',
     'systemd',
     'systemd-udev',
     'systemd-ukify',
@@ -80,7 +83,7 @@ Future<void> inside(String? flavor) async {
     image,
     File('/usr/share/edk2/ovmf/OVMF.stateless.fd'),
     Directory('/artifacts'),
-    gui: flavor != null,
+    loginScreen: loginScreen,
   );
 }
 

@@ -1,0 +1,7 @@
+[terminal]
+vt = 2
+switch = true
+
+[default_session]
+command = "tuigreet --greeting 'Civilight Sway' --cmd sway"
+user = "greetd"

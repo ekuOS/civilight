@@ -204,9 +204,15 @@ Future<void> captureLogin(
       );
       while (DateTime.now().isBefore(deadline)) {
         if (stopped != null) throw BuildFailure('QEMU exited ($stopped).');
-        final boot = await serial.exists()
+        final serialText = await serial.exists()
             ? utf8.decode(await serial.readAsBytes(), allowMalformed: true)
             : '';
+        // systemd colours "Reached target graphical.target" when writing to a
+        // console, which would hide the gate from a plain substring check.
+        final boot = serialText.replaceAll(
+          RegExp(r'\x1b\[[0-?]*[ -/]*[@-~]'),
+          '',
+        );
         // Do not measure an early boot screen. The graphical login only
         // appears after graphical.target, and a console getty is only
         // meaningful once its prompt has been printed.
@@ -310,12 +316,21 @@ Future<void> captureLogin(
 
 Future<void> main(List<String> args) async {
   try {
-    if (args.length != 3) {
+    if (args.length < 3 || args.length > 4) {
       throw const BuildFailure(
-        'Usage: dart run ci/capture_login.dart IMAGE.raw OVMF.fd ARTIFACTS',
+        'Usage: dart run ci/capture_login.dart IMAGE.raw OVMF.fd ARTIFACTS '
+        '[console|gdm|sddm|tuigreet]',
       );
     }
-    await captureLogin(File(args[0]), File(args[1]), Directory(args[2]));
+    final screen = args.length == 4
+        ? LoginScreen.values.byName(args[3])
+        : LoginScreen.console;
+    await captureLogin(
+      File(args[0]),
+      File(args[1]),
+      Directory(args[2]),
+      loginScreen: screen,
+    );
   } on Exception catch (error) {
     stderr.writeln('[ERROR] $error');
     exitCode = 1;

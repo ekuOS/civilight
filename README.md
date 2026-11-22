@@ -54,6 +54,26 @@ category/package atom on each line. Blank lines and comments beginning with
 The build always installs systemd with its EFI boot manager, Dracut, kmod,
 Btrfs tools, and AppArmor userspace and profiles.
 
+### Desktop flavors
+
+With the keyring and password hash prepared as above, `dart run build.dart`
+builds the minimal image. To add a desktop, pass its **name**:
+
+```sh
+dart run build.dart --src gnome --output out/gnome.raw
+dart run build.dart --src plasma --output out/plasma.raw
+dart run build.dart --src sway --output out/sway.raw
+```
+
+`src/NAME/packages.conf` adds packages to the common list (`--packages`
+overrides that common list). `src/NAME/overlay/` mirrors the guest filesystem:
+for example, `overlay/etc/lightdm/` configures the graphical greeter.
+Portage settings under `overlay/etc/portage/` are applied before installing the
+desktop packages. The full overlay is applied after package installation,
+before generating the initramfs. Modes and symbolic links are preserved.
+Desktop packages can use compatible signed Gentoo binaries or be built from
+source; allow substantially more build time and disk space than for minimal.
+
 Edit [config/portage](config/portage) to change the image's Portage settings.
 After unpacking the signed stage3, Portage replaces its C library with
 `sys-libs/glibc-2.44-r4` from the [ekuOS glibc binhost] for `23.0/llvm/systemd`.
@@ -117,7 +137,8 @@ dart run build.dart clean --temp-dir /path/to/work
 ## Run in QEMU
 
 Install QEMU with KVM, GTK, and OVMF. Fedora provides the GTK backend in
-`qemu-ui-gtk`. The launcher opens a window with the guest's serial login.
+`qemu-ui-gtk` and `qemu-system-x86`. The launcher opens a
+window with the guest display and a separate serial console tab.
 It uses temporary disk changes by default. Add `--persist` to write back to
 the raw image and `--firmware FILE` to select a different OVMF firmware file.
 
@@ -129,10 +150,12 @@ dart run run.dart /path/to/civilight.raw
 ### GitHub Actions screenshot
 
 The [Build and boot Civilight workflow](https://github.com/ekuOS/civilight/actions/workflows/image.yml)
-builds the image and boots it with UEFI and an NVMe disk in QEMU. Open a
-successful run and download `login.png` directly from **Artifacts**.
-The `civilight-qemu-logs` artifact contains `serial.log` and, if the login
-screen could not be confirmed, the last captured screen.
+discovers the directories immediately under `src/` and builds each one in
+parallel with the minimal image. Each image boots with UEFI and NVMe in QEMU.
+Download `flavor-NAME-screenshot` for the verified LightDM graphical login
+screen (`gui.png`), or `minimal-screenshot` for console login (`login.png`).
+This checks GUI startup to the greeter, not an authenticated user session.
+Each job also publishes its own serial log and last screen on boot timeout.
 The raw image and its generated root password are not uploaded.
 
 ## Write and boot

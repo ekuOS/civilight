@@ -47,8 +47,9 @@ class Qmp {
 Future<void> captureLogin(
   File image,
   File firmware,
-  Directory artifacts,
-) async {
+  Directory artifacts, {
+  bool gui = false,
+}) async {
   await artifacts.create(recursive: true);
   final scratch = await Directory.systemTemp.createTemp('civilight-qemu-');
   try {
@@ -67,13 +68,13 @@ Future<void> captureLogin(
       '-smp',
       '2',
       '-m',
-      '2048',
+      gui ? '4096' : '2048',
       '-bios',
       firmware.absolute.path,
       '-display',
       'none',
       '-vga',
-      'std',
+      gui ? 'virtio' : 'std',
       '-nic',
       'none',
       '-monitor',
@@ -92,13 +93,16 @@ Future<void> captureLogin(
     unawaited(qemu.exitCode.then((code) => stopped = code));
     Qmp? qmp;
     try {
-      final deadline = DateTime.now().add(const Duration(minutes: 8));
+      final deadline = DateTime.now().add(Duration(minutes: gui ? 15 : 8));
       while (DateTime.now().isBefore(deadline)) {
         if (stopped != null) throw BuildFailure('QEMU exited ($stopped).');
-        if (await serial.exists() &&
-            utf8
-                .decode(await serial.readAsBytes(), allowMalformed: true)
-                .contains('civilight login:')) {
+        if ((gui &&
+                await FileSystemEntity.type(monitor) !=
+                    FileSystemEntityType.notFound) ||
+            (await serial.exists() &&
+                utf8
+                    .decode(await serial.readAsBytes(), allowMalformed: true)
+                    .contains('civilight login:'))) {
           if (qmp == null) {
             qmp = Qmp(
               await Socket.connect(
@@ -121,11 +125,17 @@ Future<void> captureLogin(
             '--psm',
             '11',
           ]);
-          if (RegExp(
-            r'\bcivilight\s+login\b',
-            caseSensitive: false,
-          ).hasMatch(text)) {
-            final screenshot = await screen.copy('${artifacts.path}/login.png');
+          final prompt = RegExp(r'\bcivilight\s+login\b', caseSensitive: false);
+          // LightDM's GTK greeter draws a "Log In" button. Never accept
+          // a framebuffer getty or a serial login as proof of GUI startup.
+          final ready = gui
+              ? !prompt.hasMatch(text) &&
+                    RegExp(r'\blog\s+in\b', caseSensitive: false).hasMatch(text)
+              : prompt.hasMatch(text);
+          if (ready) {
+            final screenshot = await screen.copy(
+              '${artifacts.path}/${gui ? 'gui' : 'login'}.png',
+            );
             stdout.writeln(
               'Captured the guest login screen: ${screenshot.path}',
             );

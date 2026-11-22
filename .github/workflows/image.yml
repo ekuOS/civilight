@@ -13,9 +13,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  image:
+  discover:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dart-lang/setup-dart@v1
+      - id: discover
+        run: dart run ci/flavor_matrix.dart
+  image:
+    needs: discover
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    name: Build and boot ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v7
         with:
@@ -25,22 +39,28 @@ jobs:
           sdk: stable
           problem-matcher: false
       - run: dart analyze
-      - name: Build image and capture the QEMU login screen
+      - name: Build minimal image and capture console login
+        if: matrix.src == ''
         run: dart run ci/build_and_capture.dart
-      - name: Upload login.png
+      - name: Build flavor image and capture graphical login
+        if: matrix.src != ''
+        env:
+          FLAVOR: ${{ matrix.src }}
+        run: dart run ci/build_and_capture.dart --src "$FLAVOR"
+      - name: Upload verified screenshot
         uses: actions/upload-artifact@v7
         with:
-          path: out/ci/login.png
-          archive: false
+          name: ${{ matrix.name }}-screenshot
+          path: out/ci/${{ matrix.name }}/${{ matrix.src == '' && 'login.png' || 'gui.png' }}
           if-no-files-found: error
           retention-days: 14
       - name: Upload QEMU diagnostics
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: civilight-qemu-logs
+          name: ${{ matrix.name }}-qemu-logs
           path: |
-            out/ci/serial.log
-            out/ci/last-screen.png
+            out/ci/${{ matrix.name }}/serial.log
+            out/ci/${{ matrix.name }}/last-screen.png
           if-no-files-found: ignore
           retention-days: 14

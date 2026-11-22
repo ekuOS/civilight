@@ -6,7 +6,7 @@ import 'capture_login.dart';
 
 const weeklyKey = '13EBBDBEDE7A12775DFDB1BABB572E0E2D182910';
 
-Future<void> inside() async {
+Future<void> inside(String? flavor) async {
   final dart = Platform.resolvedExecutable;
   await run('dnf', [
     '-y',
@@ -21,7 +21,7 @@ Future<void> inside() async {
     'mkosi',
     'mtools',
     'openssl',
-    'qemu-system-x86-core',
+    flavor == null ? 'qemu-system-x86-core' : 'qemu-system-x86',
     'systemd',
     'systemd-udev',
     'systemd-ukify',
@@ -66,6 +66,7 @@ Future<void> inside() async {
   await run(dart, [
     'run',
     '/src/build.dart',
+    if (flavor != null) ...['--src', flavor, '--root-size-gib', '16'],
     '--gentoo-keyring',
     keyring,
     '--root-password-file',
@@ -79,13 +80,15 @@ Future<void> inside() async {
     image,
     File('/usr/share/edk2/ovmf/OVMF.stateless.fd'),
     Directory('/artifacts'),
+    gui: flavor != null,
   );
 }
 
-Future<void> inDocker() async {
+Future<void> inDocker(String? flavor) async {
   final repo = File.fromUri(Platform.script).parent.parent;
-  final artifacts = await Directory('${repo.path}/out/ci')
-      .create(recursive: true);
+  final artifacts = await Directory(
+    '${repo.path}/out/ci/${flavor == null ? 'minimal' : 'flavor-$flavor'}',
+  ).create(recursive: true);
   final sdk = File(Platform.resolvedExecutable).parent.parent.path;
   final temp = Platform.environment['RUNNER_TEMP'] ?? Directory.systemTemp.path;
   // Hosted runners may have a separate, larger temporary disk mounted on /mnt.
@@ -132,6 +135,7 @@ Future<void> inDocker() async {
       '/dart/bin/dart',
       '/src/ci/build_and_capture.dart',
       '--inside',
+      if (flavor != null) ...['--src', flavor],
     ]);
   } finally {
     await run('sudo', ['rm', '-rf', '--', work]);
@@ -140,13 +144,18 @@ Future<void> inDocker() async {
 
 Future<void> main(List<String> args) async {
   try {
-    if (args.isEmpty) {
-      await inDocker();
-    } else if (args.length == 1 && args.single == '--inside') {
-      await inside();
-    } else {
-      throw const BuildFailure('Usage: dart run ci/build_and_capture.dart');
+    final container = args.isNotEmpty && args.first == '--inside';
+    final options = container ? args.sublist(1) : args;
+    if (options.isNotEmpty &&
+        (options.length != 2 ||
+            options.first != '--src' ||
+            !RegExp(r'^[a-z0-9][a-z0-9_-]*$').hasMatch(options.last))) {
+      throw const BuildFailure(
+        'Usage: dart run ci/build_and_capture.dart [--src NAME]',
+      );
     }
+    final flavor = options.isEmpty ? null : options.last;
+    await (container ? inside(flavor) : inDocker(flavor));
   } on Exception catch (error) {
     stderr.writeln('[ERROR] $error');
     exitCode = 1;

@@ -8,4 +8,4 @@ app-text/xmlto text
 x11-base/xwayland libei
 media-libs/harfbuzz icu
 media-libs/mesa llvm video_cards_virgl
-gnome-base/gdm systemd X
+gnome-base/gdm systemd X wayland

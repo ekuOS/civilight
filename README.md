@@ -75,7 +75,8 @@ Desktop packages can use compatible signed Gentoo binaries or be built from
 source; allow substantially more build time and disk space than for minimal.
 
 Each flavor keeps its own display manager: GNOME uses GDM, Plasma uses SDDM,
-and Sway uses greetd with the tuigreet terminal greeter. CI verifies the
+and Sway uses greetd with the tuigreet terminal greeter. GDM, GNOME, and
+Plasma use Wayland (SDDM runs its greeter through kwin). CI verifies the
 matching login screen for each directory under `src/`; unknown flavor names
 need a matching check in `ci/capture_login.dart`.
 The Sway overlay selects tty2 in `overlay/etc/greetd/config.toml`, and
@@ -145,9 +146,10 @@ dart run build.dart clean --temp-dir /path/to/work
 
 ## Run in QEMU
 
-Install QEMU with KVM, GTK, and OVMF. Fedora provides the GTK backend in
-`qemu-ui-gtk` and `qemu-system-x86`. The launcher opens a
-window with the guest display and a separate serial console tab.
+Install QEMU with KVM, GTK, OpenGL, and OVMF. Fedora provides the GTK backend in
+`qemu-ui-gtk` and the 3D device in `qemu-system-x86`. The launcher exposes a
+`virtio-vga-gl` device through `gtk,gl=on` and opens a window with the guest
+display and a separate serial console tab.
 It uses temporary disk changes by default. Add `--persist` to write back to
 the raw image and `--firmware FILE` to select a different OVMF firmware file.
 

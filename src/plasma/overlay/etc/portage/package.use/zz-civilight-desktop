@@ -8,5 +8,5 @@ virtual/zlib minizip
 dev-libs/glib introspection
 media-libs/freetype harfbuzz
 media-libs/mesa llvm video_cards_virgl
-x11-misc/lightdm -introspection
 gui-apps/sddm systemd -elogind
+gui-apps/sddm-gentoo-config kwin systemd

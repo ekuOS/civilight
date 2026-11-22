@@ -95,6 +95,32 @@ class Qmp {
 
 enum LoginScreen { console, gdm, sddm, tuigreet }
 
+/// Wayland greeters need a GL-capable virtio device. Probe a headless EGL
+/// context so a host without GL falls back to the software frame buffer.
+Future<bool> qemuGlAvailable() async {
+  final process = await Process.start('qemu-system-x86_64', [
+    '-nodefaults',
+    '-machine',
+    'q35,accel=tcg',
+    '-display',
+    'egl-headless,gl=on',
+    '-device',
+    'virtio-vga-gl',
+    '-S',
+    '-monitor',
+    'none',
+    '-serial',
+    'none',
+  ]);
+  final exited = await Future.any([
+    process.exitCode.then((_) => true),
+    Future<bool>.delayed(const Duration(seconds: 4), () => false),
+  ]);
+  process.kill();
+  await process.exitCode;
+  return !exited;
+}
+
 /// Each desktop flavor is verified through its own display manager.
 LoginScreen loginScreenFor(String? flavor) => switch (flavor) {
   null => LoginScreen.console,
@@ -110,8 +136,17 @@ Future<void> captureLogin(
   Directory artifacts, {
   LoginScreen loginScreen = LoginScreen.console,
 }) async {
-  final gui = loginScreen == LoginScreen.gdm || loginScreen == LoginScreen.sddm;
   await artifacts.create(recursive: true);
+  final graphical =
+      loginScreen == LoginScreen.gdm || loginScreen == LoginScreen.sddm;
+  final gl = graphical && await qemuGlAvailable();
+  if (graphical) {
+    stdout.writeln(
+      gl
+          ? 'Using virtio-gpu with OpenGL for the Wayland greeter.'
+          : 'Host OpenGL is unavailable; using the guest software renderer.',
+    );
+  }
   final scratch = await Directory.systemTemp.createTemp('civilight-qemu-');
   try {
     final monitor = '${scratch.path}/qmp';
@@ -130,13 +165,22 @@ Future<void> captureLogin(
       '-smp',
       '2',
       '-m',
-      gui ? '4096' : '2048',
+      graphical ? '4096' : '2048',
       '-bios',
       firmware.absolute.path,
-      '-display',
-      'none',
-      '-vga',
-      gui ? 'virtio' : 'std',
+      if (gl) ...[
+        '-display',
+        'egl-headless,gl=on',
+        '-vga',
+        'none',
+        '-device',
+        'virtio-vga-gl',
+      ] else ...[
+        '-display',
+        'none',
+        '-vga',
+        graphical ? 'virtio' : 'std',
+      ],
       '-nic',
       'none',
       '-monitor',
@@ -155,7 +199,9 @@ Future<void> captureLogin(
     unawaited(qemu.exitCode.then((code) => stopped = code));
     Qmp? qmp;
     try {
-      final deadline = DateTime.now().add(Duration(minutes: gui ? 15 : 8));
+      final deadline = DateTime.now().add(
+        Duration(minutes: graphical ? 15 : 8),
+      );
       while (DateTime.now().isBefore(deadline)) {
         if (stopped != null) throw BuildFailure('QEMU exited ($stopped).');
         if ((loginScreen != LoginScreen.console &&
@@ -215,7 +261,7 @@ Future<void> captureLogin(
           };
           if (ready) {
             final screenshot = await screen.copy(
-              '${artifacts.path}/${gui ? 'gui' : 'login'}.png',
+              '${artifacts.path}/${graphical ? 'gui' : 'login'}.png',
             );
             stdout.writeln(
               'Captured the guest login screen: ${screenshot.path}',

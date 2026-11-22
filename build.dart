@@ -17,7 +17,7 @@ Build a Gentoo AMD64 UEFI disk image with mkosi.
   --root-password-file FILE
                            File containing a SHA-512 crypt hash for root
   --stage3 FILE            Use a Gentoo stage3 with a detached FILE.asc signature
-                           (default: download the latest signed systemd stage3)
+                           (default: latest signed LLVM/systemd multilib stage3)
   --packages FILE          Package list (default: packages.conf beside build.dart)
   --output FILE            New raw image (default: out/civilight.raw)
   --temp-dir DIR           Parent for build workspaces (default: output directory)

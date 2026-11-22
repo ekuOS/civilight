@@ -3,14 +3,14 @@ import 'dart:io';
 import 'commands.dart';
 
 const autobuilds = 'https://distfiles.gentoo.org/releases/amd64/autobuilds';
-const stageFlavor = 'stage3-amd64-nomultilib-systemd';
+const stageFlavor = 'stage3-amd64-llvm-systemd';
+const gentooProfile = 'default/linux/amd64/23.0/llvm/systemd';
 const glibcName = 'sys-libs/glibc';
 const glibcVersion = '2.44-r4';
 const glibcSigningFingerprint = '63E58ABD12C94B1A1BBE2076B6F6212704F5903C';
 const kernelName = 'sys-kernel/linux-eku-aa';
 const kernelRepo = 'ekuos-kernel';
-const kernelBinhost =
-    'https://ekuos.github.io/kernel/amd64/23.0/no-multilib/systemd';
+const kernelBinhost = 'https://ekuos.github.io/kernel/amd64/23.0/llvm/systemd';
 const kernelSigningFingerprint = '9420B68C629FACA5C38D1858EB89C00F0857F247';
 
 Future<void> download(String url, String path) => run('curl', [
@@ -105,22 +105,9 @@ class Gentoo {
     ], input: input);
   }
 
-  Future<void> installToolchain() async {
-    await inside([
-      'emerge',
-      '--color=n',
-      '--getbinpkg',
-      '--usepkgonly',
-      '--noreplace',
-      '--exclude=$glibcName $kernelName',
-      'llvm-core/clang',
-      'llvm-core/lld',
-      'llvm-core/llvm',
-    ]);
-    await inside(['env-update']);
+  Future<void> checkToolchain() async {
     await inside(['clang', '--version']);
     await inside(['ld.lld', '--version']);
-    await copyPortageConfig('make.conf');
   }
 
   Future<void> installRustUtilities(String targetKernel) async {
@@ -218,6 +205,7 @@ class Gentoo {
     await trustSigningKey('ekuos-glibc', glibcSigningFingerprint);
     await installBinpkg('=$cpv', ['--reinstall-atoms=$glibcName']);
     await inside(['/usr/lib64/libc.so.6']);
+    await inside(['/usr/lib/libc.so.6']);
   }
 
   static const gpg = ['gpg', '--batch', '--homedir', '/etc/portage/gnupg'];
@@ -335,6 +323,7 @@ class Gentoo {
       'DRM_FBDEV_EMULATION',
       'FRAMEBUFFER_CONSOLE',
       'BLK_DEV_INITRD',
+      'IA32_EMULATION',
       'SECURITY_APPARMOR',
       'MODULE_SIG_FORCE',
     ]) {
@@ -368,9 +357,9 @@ class Gentoo {
         !await Link(at('/etc/portage/make.profile')).exists() ||
         !(await Link(
           at('/etc/portage/make.profile'),
-        ).target()).endsWith('/default/linux/amd64/23.0/no-multilib/systemd')) {
+        ).target()).endsWith('/$gentooProfile')) {
       throw const BuildFailure(
-        'Expected a usr-merged Gentoo amd64 23.0 no-multilib systemd stage3.',
+        'Expected a usr-merged Gentoo amd64 23.0 LLVM/systemd stage3.',
       );
     }
   }
@@ -404,7 +393,7 @@ EXTRAVERSION =
       await write('$kernelConfig/include/config/kernel.release', '$release\n');
       await File(at('/boot/config-$release')).copy(at('$kernelConfig/.config'));
       const targetKernel = 'KERNEL_DIR=$kernelConfig';
-      await installToolchain();
+      await checkToolchain();
       await inside([
         targetKernel,
         'emerge',

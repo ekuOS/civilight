@@ -44,7 +44,7 @@ dart run build.dart \
 password hash. Keep the image and hash file private.
 
 By default the script verifies Gentoo's signed download index, downloads the
-AMD64 no-multilib systemd stage3, and verifies its detached signature before
+AMD64 LLVM/systemd stage3 with multilib, and verifies its detached signature before
 extraction. To reuse a specific archive, pass `--stage3 /path/to/stage3.tar.xz`
 and place its detached signature at `/path/to/stage3.tar.xz.asc`.
 
@@ -56,16 +56,16 @@ Btrfs tools, and AppArmor userspace and profiles.
 
 Edit [config/portage](config/portage) to change the image's Portage settings.
 After unpacking the signed stage3, Portage replaces its C library with
-`sys-libs/glibc-2.44-r4` from the [ekuOS glibc binhost] for amd64 systemd without
-multilib. Portage verifies the GPKG signature using the bundled ekuOS public
-key. The build does not fall back to a source build or Gentoo's binary package
+`sys-libs/glibc-2.44-r4` from the [ekuOS glibc binhost] for `23.0/llvm/systemd`.
+It includes both x86-64 and i386. Portage verifies the GPKG signature using the
+bundled ekuOS public key. The build does not fall back to a source build or Gentoo's binary package
 if the ekuOS package is unavailable. If the stage3 already has a newer glibc,
 use a compatible signed stage3 or update the ekuOS package version and Portage
 settings together.
 
-The builder installs Clang, LLD, and LLVM from Gentoo's signed binary
-repository. Portage then builds the image's additional packages and their
-missing dependencies from source with that toolchain, without replacing glibc.
+The stage3 already supplies Clang, LLD, LLVM, compiler-rt, and libc++.
+Portage uses the LLVM profile's toolchain settings to build additional
+packages from source, without replacing ekuOS glibc.
 
 Every image build, including GitHub Actions and builds with a custom
 `--packages` file, uses [uutils coreutils](https://github.com/uutils/coreutils)

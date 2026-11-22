@@ -1,0 +1,11 @@
+*/* X wayland opengl gui dbus widgets declarative qml network jpeg png svg alsa policykit
+app-text/xmlto text
+dev-qt/qtbase libproxy icu cups
+dev-qt/qt5compat icu
+x11-base/xwayland libei
+sys-libs/zlib minizip
+virtual/zlib minizip
+dev-libs/glib introspection
+media-libs/freetype harfbuzz
+media-libs/mesa llvm video_cards_virgl
+x11-misc/lightdm -introspection

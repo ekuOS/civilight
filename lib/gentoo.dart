@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'commands.dart';
+import 'flavor.dart' show applyOverlay;
 
 const autobuilds = 'https://distfiles.gentoo.org/releases/amd64/autobuilds';
 const stageFlavor = 'stage3-amd64-llvm-systemd';
@@ -367,8 +368,9 @@ class Gentoo {
   Future<String> install(
     List<String> packages,
     String passwordHash,
-    File initrd,
-  ) async {
+    File initrd, {
+    Directory? overlay,
+  }) async {
     late String release;
     await withMounts(() async {
       await File('/etc/resolv.conf').copy(at('/etc/resolv.conf'));
@@ -419,13 +421,26 @@ EXTRAVERSION =
         'sys-fs/btrfs-progs',
       ]);
       await installRustUtilities(targetKernel);
+      if (overlay != null) {
+        await applyOverlay(
+          Directory('${overlay.path}/etc/portage'),
+          root,
+          at: '/etc/portage',
+        );
+      }
       if (packages.isNotEmpty) {
         await inside([
           targetKernel,
           'emerge',
           '--color=n',
-          '--getbinpkg=n',
-          '--usepkg=n',
+          if (overlay == null) ...[
+            '--getbinpkg=n',
+            '--usepkg=n',
+          ] else ...[
+            '--getbinpkg',
+            '--binpkg-respect-use=y',
+            '--autounmask=n',
+          ],
           '--exclude=$glibcName $kernelName',
           ...packages,
         ]);
@@ -433,19 +448,19 @@ EXTRAVERSION =
       await Directory(at(kernelConfig)).delete(recursive: true);
       await replaceGnuCoreutils();
       await inside(['chpasswd', '--encrypted'], input: 'root:$passwordHash\n');
-      await inside([
-        'dracut',
-        '--force',
-        '--no-hostonly',
-        '--no-hostonly-cmdline',
-        '--no-early-microcode',
-        '--kver',
-        release,
-        '/var/tmp/civilight.initrd',
-      ]);
-      await File(at('/var/tmp/civilight.initrd')).rename(initrd.path);
       final buildState = Directory(at('/var/tmp/portage'));
       if (await buildState.exists()) await buildState.delete(recursive: true);
+      // Desktop distfiles and cached binpkgs are build inputs, not image content.
+      if (overlay != null) {
+        for (final path in [
+          '/var/cache/distfiles',
+          '/var/cache/binhost',
+          '/var/cache/binpkgs',
+        ]) {
+          final cache = Directory(at(path));
+          if (await cache.exists()) await cache.delete(recursive: true);
+        }
+      }
       if (!await File(at('/usr/lib/systemd/boot/efi/systemd-bootx64.efi'))
               .exists() ||
           !await File(at('/usr/lib/systemd/systemd')).exists()) {
@@ -491,6 +506,32 @@ After=systemd-growfs-root.service
     await run('chmod', ['0700', at('/efi')]);
     await write('/efi/loader/loader.conf', 'default civilight-$release.efi\n');
     await write('/etc/machine-id', '');
+    final osRelease = File(at('/usr/lib/os-release'));
+    final releaseLines = (await osRelease.readAsLines()).where(
+      (line) => !line.startsWith('NAME=') && !line.startsWith('PRETTY_NAME='),
+    );
+    await osRelease.writeAsString(
+      [
+        'NAME="ekuOS-civilight"',
+        'PRETTY_NAME="ekuOS-civilight"',
+        ...releaseLines,
+        '',
+      ].join('\n'),
+    );
+    if (overlay != null) await applyOverlay(overlay, root);
+    await withMounts(() async {
+      await inside([
+        'dracut',
+        '--force',
+        '--no-hostonly',
+        '--no-hostonly-cmdline',
+        '--no-early-microcode',
+        '--kver',
+        release,
+        '/var/tmp/civilight.initrd',
+      ]);
+      await File(at('/var/tmp/civilight.initrd')).rename(initrd.path);
+    });
     return release;
   }
 

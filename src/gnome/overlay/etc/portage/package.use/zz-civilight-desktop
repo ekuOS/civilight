@@ -1,0 +1,10 @@
+*/* X wayland opengl introspection gtk dbus gnome-keyring jpeg png svg alsa pulseaudio policykit networkmanager
+dev-libs/glib introspection
+media-libs/freetype harfbuzz
+app-text/poppler cairo
+net-fs/samba client
+net-libs/ngtcp2 gnutls
+app-text/xmlto text
+x11-base/xwayland libei
+media-libs/harfbuzz icu
+media-libs/mesa llvm video_cards_virgl

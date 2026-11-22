@@ -3,22 +3,24 @@
 import 'dart:io';
 
 import 'lib/commands.dart';
+import 'lib/flavor.dart';
 import 'lib/gentoo.dart';
 import 'lib/image.dart';
 import 'lib/workspace.dart';
 
 const usage = '''
-Usage: dart run build.dart --gentoo-keyring FILE --root-password-file FILE [options]
+Usage: dart run build.dart [--src NAME] [options]
        dart run build.dart clean [--temp-dir DIR] [--output FILE] [--dry-run]
 
 Build a Gentoo AMD64 UEFI disk image with mkosi.
 
-  --gentoo-keyring FILE     Trusted Gentoo Release Engineering keyring (GPG)
+  --gentoo-keyring FILE     Trusted Gentoo keyring (default: gentoo-release.gpg)
   --root-password-file FILE
-                           File containing a SHA-512 crypt hash for root
+                           SHA-512 crypt hash file (default: root-password.hash)
   --stage3 FILE            Use a Gentoo stage3 with a detached FILE.asc signature
                            (default: latest signed LLVM/systemd multilib stage3)
   --packages FILE          Package list (default: packages.conf beside build.dart)
+  --src NAME               Add src/NAME/packages.conf and overlay (e.g. sway)
   --output FILE            New raw image (default: out/civilight.raw)
   --temp-dir DIR           Parent for build workspaces (default: output directory)
   --root-size-gib N        Minimum Btrfs root partition size (default: 8)
@@ -42,6 +44,7 @@ class Options {
             '--root-password-file',
             '--stage3',
             '--packages',
+            '--src',
             '--output',
             '--temp-dir',
             '--root-size-gib',
@@ -91,18 +94,6 @@ Future<void> makeDisk(
   String kernelRelease,
   File output,
 ) async {
-  final osRelease = File('${work.path}/root/usr/lib/os-release');
-  final release = (await osRelease.readAsLines()).where(
-    (line) => !line.startsWith('NAME=') && !line.startsWith('PRETTY_NAME='),
-  );
-  await osRelease.writeAsString(
-    [
-      'NAME="ekuOS-civilight"',
-      'PRETTY_NAME="ekuOS-civilight"',
-      ...release,
-      '',
-    ].join('\n'),
-  );
   // A Gentoo package can install a named pipe. mkosi 26 copies directory
   // trees with cp --copy-contents, which would wait on the pipe.
   await run('tar', [
@@ -191,10 +182,12 @@ Future<void> build(Options options) async {
   final script = Platform.script;
   final jobs = options.number('--jobs', 2);
   final rootSize = options.number('--root-size-gib', 8, minimum: 4);
-  final keyring = options.path('--gentoo-keyring');
+  final keyring = options.path('--gentoo-keyring', 'gentoo-release.gpg');
   if (!await File(keyring).exists())
     throw BuildFailure('Keyring not found: $keyring.');
-  final passwordFile = File(options.path('--root-password-file'));
+  final passwordFile = File(
+    options.path('--root-password-file', 'root-password.hash'),
+  );
   final passwordHash = (await passwordFile.readAsString()).trim();
   if (!RegExp(
     r'^\$6\$(?:rounds=[0-9]+\$)?[./0-9A-Za-z]{1,16}\$[./0-9A-Za-z]{86}$',
@@ -208,6 +201,12 @@ Future<void> build(Options options) async {
       options.path('--packages', script.resolve('packages.conf').toFilePath()),
     ),
   );
+  final flavor = options.values['--src'] == null
+      ? null
+      : await Flavor.load(
+          options.values['--src']!,
+          Directory.fromUri(script.resolve('src/')),
+        );
   // Check this before the Portage build: mtools needs it to populate the ESP.
   final fatCodepage = await Process.run('iconv', [
     '-f',
@@ -247,7 +246,12 @@ Future<void> build(Options options) async {
     await gentoo.unpack(archive);
 
     final initrd = File('${work.path}/initrd');
-    final kernelRelease = await gentoo.install(packages, passwordHash, initrd);
+    final kernelRelease = await gentoo.install(
+      {...packages, ...?flavor?.packages}.toList(),
+      passwordHash,
+      initrd,
+      overlay: flavor?.overlay,
+    );
     await requireSpace(work.path, 2 * gib);
     await makeDisk(work, rootSize, kernelRelease, output);
   });
@@ -255,14 +259,14 @@ Future<void> build(Options options) async {
 
 Future<void> main(List<String> args) async {
   try {
-    if (args.isEmpty || args.contains('--help')) {
+    if (args.contains('--help')) {
       stdout.write(usage);
       return;
     }
     if (!Platform.isLinux || await capture('uname', ['-m']) != 'x86_64') {
       throw const BuildFailure('An x86-64 Linux build host is required.');
     }
-    final inside = args.first == '--inside-build-namespace';
+    final inside = args.isNotEmpty && args.first == '--inside-build-namespace';
     final arguments = args.sublist(inside ? 1 : 0);
     final clean = arguments.isNotEmpty && arguments.first == 'clean';
     if (clean) arguments.removeAt(0);

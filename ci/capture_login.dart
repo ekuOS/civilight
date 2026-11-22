@@ -165,7 +165,7 @@ Future<void> captureLogin(
       '-smp',
       '2',
       '-m',
-      graphical ? '4096' : '2048',
+      '4096',
       '-bios',
       firmware.absolute.path,
       if (gl) ...[
@@ -204,13 +204,20 @@ Future<void> captureLogin(
       );
       while (DateTime.now().isBefore(deadline)) {
         if (stopped != null) throw BuildFailure('QEMU exited ($stopped).');
-        if ((loginScreen != LoginScreen.console &&
-                await FileSystemEntity.type(monitor) !=
-                    FileSystemEntityType.notFound) ||
-            (await serial.exists() &&
-                utf8
-                    .decode(await serial.readAsBytes(), allowMalformed: true)
-                    .contains('civilight login:'))) {
+        final boot = await serial.exists()
+            ? utf8.decode(await serial.readAsBytes(), allowMalformed: true)
+            : '';
+        // Do not measure an early boot screen. The graphical login only
+        // appears after graphical.target, and a console getty is only
+        // meaningful once its prompt has been printed.
+        final booted = loginScreen == LoginScreen.console
+            ? boot.contains('civilight login:')
+            : boot.contains('Reached target Graphical Interface');
+        if (booted &&
+            (loginScreen != LoginScreen.console &&
+                    await FileSystemEntity.type(monitor) !=
+                        FileSystemEntityType.notFound ||
+                boot.contains('civilight login:'))) {
           if (qmp == null) {
             qmp = Qmp(
               await Socket.connect(
@@ -254,8 +261,9 @@ Future<void> captureLogin(
                       ).hasMatch(text)),
             LoginScreen.tuigreet =>
               !prompt.hasMatch(text) &&
+                  RegExp(r'civilight', caseSensitive: false).hasMatch(text) &&
                   RegExp(
-                    r'\b(?:username|sway|password)\b',
+                    r'(?:username|authenticate)',
                     caseSensitive: false,
                   ).hasMatch(text),
           };

@@ -82,7 +82,8 @@ need a matching check in `ci/capture_login.dart`.
 The Sway overlay selects tty2 in `overlay/etc/greetd/config.toml`, and
 `overlay/etc/systemd/system/greetd.service.d/tty2.conf` resets the packaged
 unit's tty1 conflict before adding tty2 conflicts. This keeps the boot console
-visible on tty1; greetd switches to tty2 for the greeter.
+visible on tty1; greetd switches to tty2 for the greeter. The kernel and
+systemd console is pinned to tty1 so it does not overwrite the tty2 greeter.
 
 Edit [config/portage](config/portage) to change the image's Portage settings.
 After unpacking the signed stage3, Portage replaces its C library with

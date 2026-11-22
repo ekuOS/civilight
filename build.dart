@@ -148,7 +148,7 @@ Bootloader=systemd-boot
 UnifiedKernelImages=unsigned
 UnifiedKernelImageFormat=civilight-&k
 Initrds=initrd
-KernelCommandLine=root=PARTUUID rootfstype=btrfs rw console=tty0 console=ttyS0,115200n8
+KernelCommandLine=root=PARTUUID rootfstype=btrfs rw console=tty1 console=ttyS0,115200n8
 CleanPackageMetadata=no
 Hostname=civilight
 Locale=C.UTF-8

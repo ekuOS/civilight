@@ -372,7 +372,13 @@ class Gentoo {
     late String release;
     await withMounts(() async {
       await File('/etc/resolv.conf').copy(at('/etc/resolv.conf'));
-      await copyPortageConfig('package.use/civilight');
+      for (final path in [
+        'package.use/civilight',
+        'package.env/civilight',
+        'env/apparmor-libstdcxx.conf',
+      ]) {
+        await copyPortageConfig(path);
+      }
       await inside(['emerge-webrsync', '--quiet']);
       await installGlibc();
       await configureKernelBinhost();

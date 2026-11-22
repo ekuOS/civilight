@@ -1,2 +1,4 @@
+# The base image does not need GObject typelibs.
+dev-libs/glib -introspection
 sys-apps/systemd boot kernel-install apparmor
 sys-kernel/dracut systemd
